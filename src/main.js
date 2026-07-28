@@ -16,6 +16,7 @@ import { Scatter } from './scatter.js';
 import { Water } from './water.js';
 import { Sky } from './sky.js';
 import { Atmosphere } from './particles.js';
+import { Hoverboard } from './hoverboard.js';
 import { Player } from './player.js';
 import { Ambience } from './audio.js';
 import { UI, WristPanel, resolveQuality, formatClock, formatCompass } from './ui.js';
@@ -65,7 +66,8 @@ const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
 
 const state = {
   textures: null, materials: null, terrain: null, scatter: null,
-  water: null, sky: null, atmosphere: null, player: null, wrist: null,
+  water: null, sky: null, atmosphere: null, hoverboard: null,
+  player: null, wrist: null,
 };
 
 const audio = new Ambience();
@@ -109,17 +111,24 @@ async function build() {
   for (let i = 0; i < 40; i++) {
     state.scatter.update(WORLD.spawn.x, WORLD.spawn.z, 12);
     const pending = state.scatter.fields.reduce((n, f) => n + f.pendingCells.length, 0);
-    ui.progress(0.72 + 0.20 * clamp(1 - pending / 90, 0, 1), 'Planting the forest…');
+    ui.progress(0.72 + 0.18 * clamp(1 - pending / 90, 0, 1), 'Planting the forest…');
     if (pending === 0) break;
     await nextFrame();
   }
 
-  ui.progress(0.94, 'Letting the wind in…');
+  ui.progress(0.91, 'Charging the hoverboard…');
+  await nextFrame();
+  state.hoverboard = new Hoverboard(scene, state.terrain.sampleSpacing, {
+    onNotice: (text) => ui.showNotice(text),
+  });
+  await state.hoverboard.load();
+
+  ui.progress(0.97, 'Letting the wind in…');
   await nextFrame();
   state.atmosphere = new Atmosphere(scene, quality);
   state.player = new Player(renderer, camera, scene, {
     sampleSpacing: state.terrain.sampleSpacing,
-    onTimeCycle: cycleTime,
+    hoverboard: state.hoverboard,
     onNotice: (text) => ui.showNotice(text),
   });
   state.wrist = new WristPanel(state.player.grips[0]);
@@ -174,10 +183,10 @@ async function checkXR() {
   if (supported) {
     ui.enterVR.disabled = false;
     ui.enterVR.textContent = 'Enter VR';
-    ui.setNote('Put the headset on before pressing Enter VR. Everything you see is generated from a seed — the same valley every time.');
+    ui.setNote('The hoverboard is waiting beside the spawn point. Walk over and press B to mount it.');
   } else {
     ui.enterVR.textContent = 'No headset detected';
-    ui.setNote('No immersive-vr device was reported. Open this page in the Quest browser (over https) to walk around in it, or explore on desktop.');
+    ui.setNote('No immersive-vr device was reported. Open this page in the Quest browser over https, or use the desktop controls to test it.');
   }
 }
 
@@ -240,6 +249,7 @@ function tick(timestamp) {
   const frameStart = performance.now();
 
   state.player.update(dt, elapsed);
+  state.hoverboard.update(dt, elapsed);
   state.player.headPosition(head);
 
   state.sky.update(dt, elapsed);
@@ -278,7 +288,7 @@ function tick(timestamp) {
     fpsAccum = 0;
     fpsFrames = 0;
     ui.setStats(
-      `${fps} fps   ${qualityName}\n` +
+      `${fps} fps   ${qualityName}${state.hoverboard.mounted ? '   BOARD' : ''}\n` +
       `${formatClock(state.sky.time)}   ${Math.round(state.player.rig.position.y)} m\n` +
       `${state.scatter.instanceCount} instances`,
     );
