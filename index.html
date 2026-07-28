@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="A procedurally generated Nordic valley you can walk around in VR, built with three.js and WebXR.">
-  <title>Openworld — a Nordic valley in VR</title>
+  <meta name="description" content="A procedurally generated Nordic valley sandbox for WebXR.">
+  <title>Openworld Sandbox</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🏔️</text></svg>">
   <script type="importmap">
@@ -20,11 +20,19 @@
   <div id="app"></div>
 
   <div id="overlay" class="overlay">
-    <div class="panel">
+    <div class="panel compact-panel">
       <header>
+        <p class="eyebrow">WEBXR SANDBOX</p>
         <h1>Openworld</h1>
-        <p class="tagline">A procedurally generated northern valley — lake, river, pine forest and high snow. No buildings, no roads. Just the land.</p>
+        <p class="tagline">A blank northern valley for testing movement, vehicles, creatures and whatever other nonsense we throw into it.</p>
       </header>
+
+      <div class="quality" id="quality-row" aria-label="Graphics quality">
+        <span class="quality-label">Graphics</span>
+        <button data-quality="low">Low</button>
+        <button data-quality="medium">Medium</button>
+        <button data-quality="high">High</button>
+      </div>
 
       <div class="loading" id="loading">
         <div class="bar"><div class="fill" id="progress-fill"></div></div>
@@ -36,41 +44,19 @@
         <button id="enter-desktop" class="secondary">Explore on desktop</button>
       </div>
 
-      <div class="quality" id="quality-row">
-        <span class="quality-label">Detail</span>
-        <button data-quality="low">Low</button>
-        <button data-quality="medium">Medium</button>
-        <button data-quality="high">High</button>
-      </div>
-
-      <div class="controls">
+      <div class="controls compact-controls">
         <div class="control-group">
-          <h2>Quest 3 / WebXR</h2>
+          <h2>VR controls</h2>
           <dl>
-            <dt>Left stick</dt><dd>Walk (where you look)</dd>
-            <dt>Left grip</dt><dd>Sprint</dd>
-            <dt>Right stick</dt><dd>Snap turn</dd>
-            <dt>Right trigger</dt><dd>Teleport arc</dd>
+            <dt>Left stick</dt><dd>Move</dd>
+            <dt>Left grip</dt><dd>Run</dd>
+            <dt>Right stick</dt><dd>Smooth turn</dd>
             <dt>A</dt><dd>Jump</dd>
-            <dt>B</dt><dd>Snap / smooth turn</dd>
-            <dt>X</dt><dd>Comfort vignette</dd>
-            <dt>Y</dt><dd>Time of day</dd>
-          </dl>
-        </div>
-        <div class="control-group">
-          <h2>Desktop</h2>
-          <dl>
-            <dt>W A S D</dt><dd>Walk</dd>
-            <dt>Mouse</dt><dd>Look (click to capture)</dd>
-            <dt>Shift</dt><dd>Sprint</dd>
-            <dt>Space</dt><dd>Jump</dd>
-            <dt>T</dt><dd>Time of day</dd>
-            <dt>V</dt><dd>Comfort vignette</dd>
-            <dt>Esc</dt><dd>Release the mouse</dd>
           </dl>
         </div>
       </div>
 
+      <p class="desktop-hint">Desktop: W A S D + mouse · Shift to run · Space to jump</p>
       <p class="note" id="xr-note"></p>
     </div>
   </div>
