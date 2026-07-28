@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="A procedurally generated Nordic valley you can walk around in VR, built with three.js and WebXR.">
+  <title>Openworld — a Nordic valley in VR</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🏔️</text></svg>">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.min.js",
+        "three/": "./vendor/three/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="overlay" class="overlay">
+    <div class="panel">
+      <header>
+        <h1>Openworld</h1>
+        <p class="tagline">A procedurally generated northern valley — lake, river, pine forest and high snow. No buildings, no roads. Just the land.</p>
+      </header>
+
+      <div class="loading" id="loading">
+        <div class="bar"><div class="fill" id="progress-fill"></div></div>
+        <div class="status" id="progress-label">Preparing…</div>
+      </div>
+
+      <div class="actions" id="actions" hidden>
+        <button id="enter-vr" class="primary" disabled>Checking for a headset…</button>
+        <button id="enter-desktop" class="secondary">Explore on desktop</button>
+      </div>
+
+      <div class="quality" id="quality-row">
+        <span class="quality-label">Detail</span>
+        <button data-quality="low">Low</button>
+        <button data-quality="medium">Medium</button>
+        <button data-quality="high">High</button>
+      </div>
+
+      <div class="controls">
+        <div class="control-group">
+          <h2>Quest 3 / WebXR</h2>
+          <dl>
+            <dt>Left stick</dt><dd>Walk (where you look)</dd>
+            <dt>Left grip</dt><dd>Sprint</dd>
+            <dt>Right stick</dt><dd>Snap turn</dd>
+            <dt>Right trigger</dt><dd>Teleport arc</dd>
+            <dt>A</dt><dd>Jump</dd>
+            <dt>B</dt><dd>Snap / smooth turn</dd>
+            <dt>X</dt><dd>Comfort vignette</dd>
+            <dt>Y</dt><dd>Time of day</dd>
+          </dl>
+        </div>
+        <div class="control-group">
+          <h2>Desktop</h2>
+          <dl>
+            <dt>W A S D</dt><dd>Walk</dd>
+            <dt>Mouse</dt><dd>Look (click to capture)</dd>
+            <dt>Shift</dt><dd>Sprint</dd>
+            <dt>Space</dt><dd>Jump</dd>
+            <dt>T</dt><dd>Time of day</dd>
+            <dt>V</dt><dd>Comfort vignette</dd>
+            <dt>Esc</dt><dd>Release the mouse</dd>
+          </dl>
+        </div>
+      </div>
+
+      <p class="note" id="xr-note"></p>
+    </div>
+  </div>
+
+  <div id="hud" class="hud" hidden>
+    <div id="notice" class="notice"></div>
+    <div id="stats" class="stats"></div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
