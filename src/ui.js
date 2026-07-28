@@ -42,7 +42,7 @@ export class UI {
     this.hud.hidden = true;
   }
 
-  /** Wire the quality buttons; changing detail reloads with a new setting. */
+  /** Wire the quality buttons; changing detail reloads with the chosen preset. */
   bindQuality(current, onChange) {
     for (const button of document.querySelectorAll('[data-quality]')) {
       const value = button.dataset.quality;
@@ -67,14 +67,14 @@ export class UI {
   }
 }
 
-/** Read the requested quality from the URL, storage, or the device. */
+/**
+ * Honour an explicit URL or saved choice. Otherwise start on High: the quality
+ * buttons remain on the start screen for devices that need Medium or Low.
+ */
 export function resolveQuality() {
   const params = new URLSearchParams(location.search);
   const requested = params.get('q') || params.get('quality') || localStorage.getItem('openworld.quality');
   if (requested && QUALITY[requested]) return requested;
-  const ua = navigator.userAgent;
-  if (/Quest|OculusBrowser|Pico|VR/i.test(ua)) return 'medium';
-  if (/Android|iPhone|iPad/i.test(ua)) return 'low';
   return 'high';
 }
 
@@ -101,7 +101,6 @@ export class WristPanel {
       side: THREE.DoubleSide,
     });
     this.mesh = new THREE.Mesh(geometry, material);
-    // Sits just above the back of the hand, tilted toward the face.
     this.mesh.position.set(0, 0.035, 0.055);
     this.mesh.rotation.set(-Math.PI / 2.5, 0, 0);
     parent.add(this.mesh);
