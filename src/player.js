@@ -1,14 +1,23 @@
 /**
  * Player rig and deliberately minimal locomotion.
  *
- * Quest / WebXR:
+ * Quest / WebXR on foot:
  *   left stick       move relative to head direction
  *   left grip        run
  *   right stick L/R  smooth turn
  *   A                jump
+ *   B                mount nearby hoverboard
+ *
+ * Quest / WebXR while mounted:
+ *   left stick U/D   accelerate / reverse
+ *   left stick L/R   steer
+ *   right stick L/R  steer
+ *   right trigger    upward thrust
+ *   left grip        boost
+ *   B                dismount
  *
  * Desktop:
- *   W A S D + mouse, Shift run, Space jump
+ *   W A S D + mouse, Shift run/boost, Space jump/thrust, E mount/dismount
  */
 
 import * as THREE from 'three';
@@ -27,6 +36,8 @@ export class Player {
     this.camera = camera;
     this.scene = scene;
     this.sampleSpacing = options.sampleSpacing || 2;
+    this.hoverboard = options.hoverboard || null;
+    this.onNotice = options.onNotice || (() => {});
 
     this.rig = new THREE.Group();
     this.rig.name = 'playerRig';
@@ -41,6 +52,7 @@ export class Player {
     this._prevButtons = { left: [], right: [] };
 
     this.keys = new Set();
+    this.justPressedKeys = new Set();
     this.yaw = options.yaw ?? 0;
     this.pitch = 0;
     this.pointerLocked = false;
@@ -87,6 +99,7 @@ export class Player {
     const canvas = this.renderer.domElement;
 
     this._onKeyDown = (event) => {
+      if (!event.repeat) this.justPressedKeys.add(event.code);
       this.keys.add(event.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
         event.preventDefault();
@@ -129,9 +142,11 @@ export class Player {
         ? [gamepad.axes[2], gamepad.axes[3]]
         : [gamepad.axes[0] || 0, gamepad.axes[1] || 0];
       const buttons = gamepad.buttons.map((button) => button.pressed);
+      const values = gamepad.buttons.map((button) => button.value);
+      const handState = { axes, buttons, values };
 
-      if (source.handedness === 'left') state.left = { axes, buttons };
-      if (source.handedness === 'right') state.right = { axes, buttons };
+      if (source.handedness === 'left') state.left = handState;
+      if (source.handedness === 'right') state.right = handState;
     }
 
     return state;
@@ -173,9 +188,75 @@ export class Player {
     return gridHeightAt(x, z, this.sampleSpacing);
   }
 
+  toggleHoverboard() {
+    if (!this.hoverboard) return;
+
+    if (this.hoverboard.mounted) {
+      this.hoverboard.dismount(this);
+      return;
+    }
+
+    if (!this.hoverboard.mount(this)) {
+      this.onNotice('Move closer to the hoverboard');
+    }
+  }
+
+  finishInputFrame(input) {
+    if (input) {
+      this._prevButtons.left = input.left ? input.left.buttons.slice() : [];
+      this._prevButtons.right = input.right ? input.right.buttons.slice() : [];
+    }
+    this.justPressedKeys.clear();
+  }
+
   update(dt) {
     const xr = this.renderer.xr.isPresenting;
     const input = xr ? this.readXRInput() : null;
+
+    const boardToggle = xr
+      ? !!input?.right && this.pressed('right', 5, input)
+      : this.justPressedKeys.has('KeyE');
+
+    if (boardToggle) {
+      this.toggleHoverboard();
+      if (xr) this.pulse('right', 0.45, 45);
+    }
+
+    if (this.hoverboard?.mounted) {
+      let forward = 0;
+      let steer = 0;
+      let turn = 0;
+      let lift = 0;
+      let boost = false;
+
+      if (xr && input) {
+        if (input.left) {
+          const [x, y] = input.left.axes;
+          steer = Math.abs(x) > PLAYER.deadZone ? x : 0;
+          forward = Math.abs(y) > PLAYER.deadZone ? -y : 0;
+          boost = !!input.left.buttons[1];
+        }
+        if (input.right) {
+          const [x] = input.right.axes;
+          turn = Math.abs(x) > PLAYER.deadZone ? x : 0;
+          lift = input.right.values[0] || 0;
+        }
+      } else {
+        if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) forward += 1;
+        if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) forward -= 1;
+        if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) steer -= 1;
+        if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) steer += 1;
+        lift = this.keys.has('Space') ? 1 : 0;
+        boost = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+        this.camera.rotation.set(this.pitch, 0, 0);
+        this.camera.position.y = this.headHeight;
+      }
+
+      this.hoverboard.updateMounted(dt, { forward, steer, turn, lift, boost }, this);
+      this.headHeight = xr ? this.camera.position.y : PLAYER.eyeHeight;
+      this.finishInputFrame(input);
+      return;
+    }
 
     let moveX = 0;
     let moveZ = 0;
@@ -197,9 +278,6 @@ export class Player {
         }
         jump = this.pressed('right', 4, input);
       }
-
-      this._prevButtons.left = input.left ? input.left.buttons.slice() : [];
-      this._prevButtons.right = input.right ? input.right.buttons.slice() : [];
     } else {
       if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) moveZ -= 1;
       if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) moveZ += 1;
@@ -289,6 +367,7 @@ export class Player {
     }
 
     this.headHeight = xr ? this.camera.position.y : PLAYER.eyeHeight;
+    this.finishInputFrame(input);
   }
 
   canStep(x, z) {
