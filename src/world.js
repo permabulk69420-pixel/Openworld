@@ -448,7 +448,7 @@ export function surfaceColor(x, z, h = heightAt(x, z), slope = slopeAt(x, z), m 
     const grade = zone === ZONE.PARK
       ? [0.19, 0.30, 0.10]
       : zone === ZONE.HIGHWAY
-        ? [0.20, 0.19, 0.17]
+        ? [0.30, 0.27, 0.21]
         : [0.24, 0.24, 0.23];
     const w = zone === ZONE.PARK ? 0.85 : 0.9;
     r = lerp(r, grade[0] * tint, w);

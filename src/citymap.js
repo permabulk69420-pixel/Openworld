@@ -136,18 +136,21 @@ export function plainWeight(x, z) {
  * terrain is graded to meet them, which is what cuts the gorge through the rim.
  */
 const ROAD_CONTROL = [
-  [70, 132, 12.6],
-  [24, 186, 15.0],
-  [-58, 226, 18.5],
-  [-152, 258, 22.0],
-  [-248, 296, 26.5],
-  [-330, 344, 31.5],
-  [-386, 400, 37.0],
-  [-414, 452, 40.5],
-  [-424, 506, 41.5],
-  [-434, 562, 38.5],
-  [-436, 618, 31.0],
-  [-430, 668, 23.0],
+  // Across the valley floor the profile hugs the natural ground, so the road
+  // reads as a track laid on the meadow rather than a trench cut through it.
+  [96, 140, 11.8],
+  [30, 182, 22.0],
+  [-58, 226, 28.0],
+  [-152, 258, 20.0],
+  [-248, 296, 12.0],
+  [-330, 344, 9.0],
+  // From here it climbs the rim, and the cut becomes the gorge.
+  [-386, 400, 22.0],
+  [-414, 452, 33.0],
+  [-424, 506, 41.0],
+  [-434, 562, 41.5],
+  [-436, 618, 35.0],
+  [-430, 668, 25.0],
   [-422, 706, plainHeightAt(-422, 706)],
   [-416, 748, plainHeightAt(-416, 748)],
 ];
@@ -453,8 +456,9 @@ export function zoneAt(x, z) {
   }
 
   const hit = highwayAt(x, z);
-  // A little wider than the carriageway itself, so nothing grows in the verge.
-  if (hit && hit.dist < ROAD_SHELF + 4) _zone.kind = ZONE.HIGHWAY;
+  // The flat shelf only — grass and trees come right up to the gravel verge,
+  // which is what stops the road reading as a runway through the meadow.
+  if (hit && hit.dist < ROAD_SHELF) _zone.kind = ZONE.HIGHWAY;
   return _zone;
 }
 

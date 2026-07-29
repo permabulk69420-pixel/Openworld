@@ -476,31 +476,44 @@ function addWaterfront(B) {
   }
 }
 
-/** The road out of the valley, laid on the terrain it was graded into. */
+/**
+ * The road out of the valley, laid on the terrain it was graded into.
+ *
+ * Each cross-section is offset along the *averaged* tangent at its own path
+ * point rather than along the segment it starts. Per-segment normals leave a
+ * wedge of bare ground showing through on the outside of every bend.
+ */
 function addHighway(B) {
   const half = ROAD_SHELF * 0.62;
+  const rows = [];
   let arc = 0;
-  for (let i = 0; i < ROAD_PATH.length - 1; i++) {
-    const a = ROAD_PATH[i];
-    const b = ROAD_PATH[i + 1];
-    let tx = b[0] - a[0], tz = b[1] - a[1];
-    const len = Math.hypot(tx, tz) || 1;
-    tx /= len; tz /= len;
+
+  for (let i = 0; i < ROAD_PATH.length; i++) {
+    const p = ROAD_PATH[i];
+    const prev = ROAD_PATH[Math.max(0, i - 1)];
+    const next = ROAD_PATH[Math.min(ROAD_PATH.length - 1, i + 1)];
+    let tx = next[0] - prev[0];
+    let tz = next[1] - prev[1];
+    const t = Math.hypot(tx, tz) || 1;
+    tx /= t; tz /= t;
     const nx = -tz, nz = tx;
 
-    const corner = (p, side) => {
+    if (i > 0) arc += Math.hypot(p[0] - prev[0], p[1] - prev[1]);
+
+    const edge = (side) => {
       const x = p[0] + nx * half * side;
       const z = p[1] + nz * half * side;
       return [x, heightAt(x, z) + 0.04, z];
     };
-    const a0 = corner(a, -1), a1 = corner(a, 1);
-    const b0 = corner(b, -1), b1 = corner(b, 1);
-    const v0 = arc / 14;
-    const v1 = (arc + len) / 14;
-    arc += len;
+    rows.push({ left: edge(-1), right: edge(1), v: arc / 14 });
+  }
+
+  for (let i = 0; i < rows.length - 1; i++) {
+    const a = rows[i];
+    const b = rows[i + 1];
     B.quad([
-      ...a0, ...a1, ...b1, ...b0,
-    ], [0, v0, 1, v0, 1, v1, 0, v1], TILE.ROAD_STREET, ROAD_COLOR);
+      ...a.left, ...a.right, ...b.right, ...b.left,
+    ], [0, a.v, 1, a.v, 1, b.v, 0, b.v], TILE.ROAD_STREET, ROAD_COLOR);
   }
 }
 
