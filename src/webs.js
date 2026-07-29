@@ -22,6 +22,7 @@ const MAX_TETHER_ACCEL = 82;
 const AIR_CONTROL = 9.5;
 const COAST_CONTROL = 3.2;
 const MAX_SWING_SPEED = 52;
+const HANDS = ['left', 'right'];
 
 const _origin = new THREE.Vector3();
 const _direction = new THREE.Vector3();
@@ -148,7 +149,7 @@ export class WebShooter {
   }
 
   releaseAll(cancelMomentum = false) {
-    for (const hand of ['left', 'right']) {
+    for (const hand of HANDS) {
       const web = this.webs[hand];
       web.active = false;
       web.held = false;
@@ -206,7 +207,7 @@ export class WebShooter {
   }
 
   updateLines() {
-    for (const hand of ['left', 'right']) {
+    for (const hand of HANDS) {
       const web = this.webs[hand];
       if (!web.active || !web.source) continue;
       this.rayFromSource(web.source, hand, web.desktop, _origin, _direction);
@@ -218,7 +219,6 @@ export class WebShooter {
       positions[4] = web.anchor.y;
       positions[5] = web.anchor.z;
       web.geometry.attributes.position.needsUpdate = true;
-      web.geometry.computeBoundingSphere();
     }
   }
 
@@ -238,7 +238,8 @@ export class WebShooter {
     _body.copy(player.rig.position);
     _body.y += clamp(player.headHeight * 0.58, 0.82, 1.15);
 
-    for (const web of Object.values(this.webs)) {
+    for (const hand of HANDS) {
+      const web = this.webs[hand];
       if (!web.active) continue;
       _toAnchor.subVectors(web.anchor, _body);
       const distance = _toAnchor.length();
@@ -327,7 +328,8 @@ export class WebShooter {
 
   dispose() {
     this.releaseAll(true);
-    for (const web of Object.values(this.webs)) {
+    for (const hand of HANDS) {
+      const web = this.webs[hand];
       web.geometry.dispose();
       web.material.dispose();
     }
