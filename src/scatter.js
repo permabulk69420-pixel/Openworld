@@ -20,6 +20,7 @@ import {
   makePine, makeBirchTrunk, makeCanopy, makeDeadTree, makeStump, makeRock,
   makeGrassClump, makeBush, makeReeds,
 } from './assets.js';
+import { zoneAt, ZONE } from './citymap.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -375,6 +376,24 @@ export class Scatter {
         // Keep the riverbanks clear enough to walk and see the water.
         if (riverDistanceAt(x, z) < RIVER_WIDTH + 3.5) continue;
 
+        // The city plants its own street trees; the parks are planted here,
+        // with the same species that grow up in the valley.
+        const zone = zoneAt(x, z).kind;
+        if (zone !== ZONE.OUTSIDE && zone !== ZONE.PARK) continue;
+        if (zone === ZONE.PARK) {
+          // Sparser and more varied than the forest: a park is planted, not
+          // grown, and a uniform stand of birch poles looks like neither.
+          if (rnd() > 0.26 * density) continue;
+          const y = this.plantHeight(sampler, x, z) - 0.12;
+          const r = rnd();
+          const def = r < 0.58 ? (rnd() < 0.62 ? T.BIRCH : T.BIRCH_AUTUMN)
+            : r < 0.94 ? [T.PINE_A, T.PINE_B, T.PINE_C][(rnd() * 3) | 0]
+              : T.STUMP;
+          const scale = def === T.STUMP ? 1.2 + rnd() * 0.6 : 4.5 + Math.pow(rnd(), 1.5) * 8;
+          out.push(place(def, x, y, z, rnd() * Math.PI * 2, scale, _normal, 0.95));
+          continue;
+        }
+
         const m = moistureAt(x, z, h);
         const biome = biomeAt(x, z, h, slope, m);
         // Thin out toward the tree line.
@@ -432,7 +451,9 @@ export class Scatter {
         const x = x0 + (i + rnd() * 0.9) * step;
         const z = z0 + (j + rnd() * 0.9) * step;
         const h = sampler.height(x, z);
-        if (h < -1.2 || h > 200) continue;
+        if (h < -1.2 || h > 240) continue;
+        const zone = zoneAt(x, z).kind;
+        if (zone !== ZONE.OUTSIDE && zone !== ZONE.PARK) continue;
         sampler.normal(x, z, _normal);
         const slope = 1 - _normal.y;
         const m = moistureAt(x, z, h);
@@ -503,11 +524,13 @@ export class Scatter {
           sampler.normal(x, z, _normal);
           const slope = 1 - _normal.y;
           if (slope > 0.40) continue;
+          const zone = zoneAt(x, z).kind;
+          if (zone !== ZONE.OUTSIDE && zone !== ZONE.PARK) continue;
           const m = moistureAt(x, z, h);
           const biome = biomeAt(x, z, h, slope, m);
           if (biome === BIOME.SNOW) continue;
 
-          let cover = 0.85;
+          let cover = zone === ZONE.PARK ? 0.95 : 0.85;
           if (biome === BIOME.MOOR) cover = 0.6;
           if (biome === BIOME.SHORE) cover = 0.25;
           if (biome === BIOME.MARSH) cover = 0.7;
@@ -520,7 +543,8 @@ export class Scatter {
           // Dry tussocks on the drier ground, flowers in the good meadows.
           let tile;
           const r = rnd();
-          if (h > WORLD.treeLine - 6) tile = 1;
+          if (zone === ZONE.PARK) tile = r < 0.16 ? (r < 0.08 ? 2 : 3) : 0;
+          else if (h > WORLD.treeLine - 6) tile = 1;
           else if (m < 0.4) tile = r < 0.75 ? 1 : 0;
           else if (biome === BIOME.MEADOW && r < 0.22) tile = r < 0.11 ? 2 : 3;
           else tile = r < 0.85 ? 0 : 1;

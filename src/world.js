@@ -5,7 +5,8 @@
  * Everything here is pure math on plain numbers (no three.js) so the same code
  * runs in the browser and under node in tools/preview.mjs.
  *
- * Layout of the valley, looking down (north = -Z):
+ * Layout, looking down (north = -Z). The valley is the original world and is
+ * reproduced exactly inside its own 1024 m box; everything beyond it is new.
  *
  *        NW tundra          high peaks (N / NE)
  *                 \        /
@@ -13,19 +14,37 @@
  *                 \   river   /
  *          marsh ---  LAKE  ---
  *                 (S shore, spawn)
+ *   ─────────────── valley rim ────────────────
+ *              \  the pass  /                     the highway climbs
+ *   ══════════════════════════════════════════    through the rim here
+ *                THE CITY (see citymap.js)
+ *   ▓▓▓▓▓▓▓▓▓▓▓▓ the bay, open to the south ▓▓▓▓
  */
 
 import { Noise2D, clamp, lerp, smoothstep, smin } from './noise.js';
+import {
+  plainHeightAt, plainWeight, gradeForHighway, zoneAt, ZONE,
+} from './citymap.js';
+
+/**
+ * The valley's own domain. The original world was 1024 m square and its height
+ * function is written in terms of that half-extent, so keeping it as a separate
+ * constant means widening the world does not move a single stone in the valley.
+ */
+export const VALLEY_HALF = 512;
 
 export const WORLD = {
   seed: 20260728,
-  size: 1024,          // metres, square
-  half: 512,
-  seaLevel: 0,         // lake surface sits at y = 0
+  size: 2560,          // metres, square
+  half: 1280,
+  seaLevel: 0,         // lake and sea surface both sit at y = 0
   shoreLine: 1.6,      // sand/gravel band above the water line
   treeLine: 68,        // pines give up above this
   snowLine: 84,        // permanent snow (modulated by noise + slope)
   spawn: { x: 56, z: 138 },   // south shore rise, facing north over the lake
+  /** Where the valley ends and the new terrain takes over. */
+  valleyHalf: VALLEY_HALF,
+  valleyFeather: 152,
 };
 
 const noiseBase = new Noise2D(WORLD.seed);
@@ -99,7 +118,7 @@ export function riverSurfaceAt(s) {
  * Stores distance (metres, capped) and arc length at the closest point.
  */
 const FIELD_RES = 320;
-const FIELD_STEP = WORLD.size / (FIELD_RES - 1);
+const FIELD_STEP = (VALLEY_HALF * 2) / (FIELD_RES - 1);
 const riverDist = new Float32Array(FIELD_RES * FIELD_RES).fill(9999);
 const riverArc = new Float32Array(FIELD_RES * FIELD_RES);
 
@@ -108,16 +127,16 @@ const riverArc = new Float32Array(FIELD_RES * FIELD_RES);
   const cells = Math.ceil(reach / FIELD_STEP);
   for (let i = 0; i < RIVER_PATH.length; i++) {
     const [px, pz] = RIVER_PATH[i];
-    const gx = (px + WORLD.half) / FIELD_STEP;
-    const gz = (pz + WORLD.half) / FIELD_STEP;
+    const gx = (px + VALLEY_HALF) / FIELD_STEP;
+    const gz = (pz + VALLEY_HALF) / FIELD_STEP;
     const x0 = Math.max(0, Math.floor(gx - cells));
     const x1 = Math.min(FIELD_RES - 1, Math.ceil(gx + cells));
     const z0 = Math.max(0, Math.floor(gz - cells));
     const z1 = Math.min(FIELD_RES - 1, Math.ceil(gz + cells));
     for (let z = z0; z <= z1; z++) {
-      const wz = z * FIELD_STEP - WORLD.half;
+      const wz = z * FIELD_STEP - VALLEY_HALF;
       for (let x = x0; x <= x1; x++) {
-        const wx = x * FIELD_STEP - WORLD.half;
+        const wx = x * FIELD_STEP - VALLEY_HALF;
         const d = Math.hypot(wx - px, wz - pz);
         const idx = z * FIELD_RES + x;
         if (d < riverDist[idx]) {
@@ -130,8 +149,8 @@ const riverArc = new Float32Array(FIELD_RES * FIELD_RES);
 })();
 
 function sampleField(field, x, z) {
-  const gx = clamp((x + WORLD.half) / FIELD_STEP, 0, FIELD_RES - 1.001);
-  const gz = clamp((z + WORLD.half) / FIELD_STEP, 0, FIELD_RES - 1.001);
+  const gx = clamp((x + VALLEY_HALF) / FIELD_STEP, 0, FIELD_RES - 1.001);
+  const gz = clamp((z + VALLEY_HALF) / FIELD_STEP, 0, FIELD_RES - 1.001);
   const x0 = gx | 0, z0 = gz | 0;
   const fx = gx - x0, fz = gz - z0;
   const i00 = z0 * FIELD_RES + x0;
@@ -154,8 +173,11 @@ export function riverArcAt(x, z) {
 // Height field
 // ---------------------------------------------------------------------------
 
-/** Terrain height in metres at world (x,z). This is the authoritative surface. */
-export function heightAt(x, z) {
+/**
+ * The valley, exactly as it has always been. Written against VALLEY_HALF, not
+ * WORLD.half, so it is unaffected by the world growing around it.
+ */
+export function valleyHeightAt(x, z) {
   // Domain warp keeps the big shapes from looking like plain noise.
   const wx = x + 74 * noiseWarp.noise(x * 0.0016, z * 0.0016);
   const wz = z + 74 * noiseWarp.noise(x * 0.0016 + 41.7, z * 0.0016 - 19.3);
@@ -166,7 +188,7 @@ export function heightAt(x, z) {
   // Where the mountains are allowed to grow, biased north and east so the
   // south shore stays open and walkable.
   const massif = smoothstep(-0.08, 0.30, noiseBase.fbm(x + 2000, z - 1400, 3, 1 / 620, 0.55));
-  const northEast = smoothstep(0.0, 1.0, (-z / WORLD.half) * 0.66 + (x / WORLD.half) * 0.40 + 0.36);
+  const northEast = smoothstep(0.0, 1.0, (-z / VALLEY_HALF) * 0.66 + (x / VALLEY_HALF) * 0.40 + 0.36);
   const ridge = Math.pow(noiseRidge.ridged(wx, wz, 6, 1 / 430, 0.5), 1.7);
   const peaks = ridge * 205 * massif * (0.14 + 0.86 * northEast);
   h += peaks;
@@ -182,7 +204,7 @@ export function heightAt(x, z) {
 
   // A ragged rim of peaks so the valley reads as enclosed instead of just
   // ending. The noise offset keeps it from looking like a square frame.
-  const eBase = Math.max(Math.abs(x), Math.abs(z)) / WORLD.half;
+  const eBase = Math.max(Math.abs(x), Math.abs(z)) / VALLEY_HALF;
   const e = eBase + 0.13 * noiseBase.fbm(x, z, 3, 1 / 300, 0.5) - 0.03;
   const rim = smoothstep(0.62, 1.02, e);
   h += rim * rim * (150 + 60 * noiseRidge.ridged(x, z, 4, 1 / 240, 0.5));
@@ -206,6 +228,70 @@ export function heightAt(x, z) {
   }
 
   return h;
+}
+
+/**
+ * Everything outside the valley: a mountain country of ridges and hollows,
+ * closed off by a rim at the world's edge — except to the south, where the rim
+ * is opened so the bay can run out to the horizon.
+ */
+function outerHeightAt(x, z) {
+  const wx = x + 92 * noiseWarp.noise(x * 0.0012 + 5.3, z * 0.0012 - 2.1);
+  const wz = z + 92 * noiseWarp.noise(x * 0.0012 - 11.7, z * 0.0012 + 8.9);
+
+  // Biased upward on purpose: the only water outside the valley should be the
+  // bay, so the mountain country never dips below the sea line by accident.
+  let h = 22 + noiseBase.fbm(wx, wz, 4, 1 / 780, 0.5) * 24;
+
+  const massif = smoothstep(-0.24, 0.30, noiseBase.fbm(x - 900, z + 1500, 3, 1 / 700, 0.55));
+  const ridge = Math.pow(noiseRidge.ridged(wx, wz, 6, 1 / 470, 0.5), 1.62);
+  h += ridge * 232 * (0.26 + 0.74 * massif);
+
+  h += Math.pow(noiseRidge.ridged(x + 4400, z - 2600, 4, 1 / 205, 0.5), 2.0) * 54 * massif;
+  h += noiseBase.fbm(wx, wz, 4, 1 / 165, 0.5) * 14;
+  h += noiseDetail.fbm(x, z, 3, 1 / 34, 0.5) * 3.0 * smoothstep(-4, 14, h);
+
+  // Rim at the edge of the map. Warped hard, because the valley already has a
+  // squared-off rim of its own and two concentric boxes would look like a maze.
+  const rx = x + 190 * noiseBase.fbm(x - 2400, z + 1900, 3, 1 / 640, 0.55);
+  const rz = z + 190 * noiseBase.fbm(x + 3100, z - 1200, 3, 1 / 640, 0.55);
+  const eBase = Math.max(Math.abs(rx), Math.abs(rz)) / WORLD.half;
+  const e = eBase + 0.14 * noiseBase.fbm(x + 600, z - 300, 3, 1 / 300, 0.5) - 0.02;
+  let rim = smoothstep(0.64, 1.06, e);
+
+  // The sea gate: no rim across the mouth of the bay, so the water reaches the
+  // horizon between two headlands instead of hitting a wall.
+  const gate = smoothstep(640, 830, z) * (1 - smoothstep(770, 1000, Math.abs(x)));
+  rim *= 1 - gate;
+  h += rim * rim * (172 + 74 * noiseRidge.ridged(x, z, 4, 1 / 250, 0.5));
+
+  return h;
+}
+
+/**
+ * Terrain height in metres at world (x,z). This is the authoritative surface.
+ *
+ * Three surfaces, in order: the mountains, the city's plain lerped over them,
+ * the valley lerped over that, and finally the highway graded into whatever
+ * came out — which is what cuts the gorge through the valley rim.
+ */
+export function heightAt(x, z) {
+  const maxAbs = Math.max(Math.abs(x), Math.abs(z));
+  const wValley = maxAbs <= VALLEY_HALF
+    ? 1
+    : 1 - smoothstep(VALLEY_HALF, VALLEY_HALF + WORLD.valleyFeather, maxAbs);
+
+  let h;
+  if (wValley >= 1) {
+    h = valleyHeightAt(x, z);
+  } else {
+    h = outerHeightAt(x, z);
+    const wPlain = plainWeight(x, z);
+    if (wPlain > 0.0005) h = lerp(h, plainHeightAt(x, z), wPlain);
+    if (wValley > 0.0005) h = lerp(h, valleyHeightAt(x, z), wValley);
+  }
+
+  return gradeForHighway(h, x, z);
 }
 
 /**
@@ -351,9 +437,28 @@ export function surfaceColor(x, z, h = heightAt(x, z), slope = slopeAt(x, z), m 
   const v1 = noiseColor.fbm(x, z, 3, 1 / 26, 0.5) * 0.085;
   const v2 = noiseColor.fbm(x + 900, z - 500, 2, 1 / 170, 0.5) * 0.07;
   const tint = 1 + v1 + v2;
-  target[0] = clamp(r * tint, 0, 1);
-  target[1] = clamp(g * (tint + v2 * 0.35), 0, 1);
-  target[2] = clamp(bl * tint, 0, 1);
+  r = clamp(r * tint, 0, 1);
+  g = clamp(g * (tint + v2 * 0.35), 0, 1);
+  bl = clamp(bl * tint, 0, 1);
+
+  // Made ground. Most of this is hidden under the paving meshes, but it keeps
+  // meadow green from peeking out at every kerb, and it paints the parks.
+  const zone = zoneAt(x, z).kind;
+  if (zone !== ZONE.OUTSIDE) {
+    const grade = zone === ZONE.PARK
+      ? [0.19, 0.30, 0.10]
+      : zone === ZONE.HIGHWAY
+        ? [0.30, 0.27, 0.21]
+        : [0.24, 0.24, 0.23];
+    const w = zone === ZONE.PARK ? 0.85 : 0.9;
+    r = lerp(r, grade[0] * tint, w);
+    g = lerp(g, grade[1] * tint, w);
+    bl = lerp(bl, grade[2] * tint, w);
+  }
+
+  target[0] = r;
+  target[1] = g;
+  target[2] = bl;
   return target;
 }
 

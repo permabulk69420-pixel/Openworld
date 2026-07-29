@@ -71,6 +71,131 @@ function applyWind(material) {
   return material;
 }
 
+// ---------------------------------------------------------------------------
+// City surfaces
+// ---------------------------------------------------------------------------
+
+/**
+ * The city puts every surface it owns — facades, roofs, tarmac, decking — in one
+ * atlas, so the whole downtown can share a single material and a single texture
+ * bind. The catch is that an atlas cannot use REPEAT wrapping, and a wall needs
+ * its window pattern to repeat dozens of times.
+ *
+ * So the repeat happens in the shader instead. Geometry carries UVs measured in
+ * tile repeats (bays across, floors up) and a per-vertex `aAtlas` giving the
+ * tile's offset and size; the fragment shader wraps with fract() and samples
+ * with explicit derivatives, which is what keeps the mip level correct across
+ * the seam where fract() jumps.
+ */
+const ATLAS_PARS_VERTEX = /* glsl */`
+  attribute vec4 aAtlas;
+  varying vec4 vAtlas;
+`;
+
+const ATLAS_PARS_FRAGMENT = /* glsl */`
+  varying vec4 vAtlas;
+  vec4 sampleAtlas( sampler2D atlas, vec2 uv, vec4 rect ) {
+    vec2 wrapped = fract( uv ) * rect.zw + rect.xy;
+    vec2 ddx = dFdx( uv ) * rect.zw;
+    vec2 ddy = dFdy( uv ) * rect.zw;
+    // Cap the footprint at a fraction of the tile. Without this a road seen
+    // edge-on picks a mip level coarser than the tile itself, and the whole
+    // atlas averages together into one grey smear. Both derivatives are scaled
+    // by the same factor so the anisotropy ratio survives.
+    float widest = max( max( abs( ddx.x ), abs( ddx.y ) ), max( abs( ddy.x ), abs( ddy.y ) ) );
+    float limit = min( rect.z, rect.w ) * 0.22;
+    if ( widest > limit ) {
+      float k = limit / widest;
+      ddx *= k;
+      ddy *= k;
+    }
+    return textureGrad( atlas, wrapped, ddx, ddy );
+  }
+`;
+
+function applyAtlas(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = ATLAS_PARS_VERTEX + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n  vAtlas = aAtlas;',
+    );
+    shader.fragmentShader = ATLAS_PARS_FRAGMENT + shader.fragmentShader
+      .replace('#include <map_fragment>', /* glsl */`
+        #ifdef USE_MAP
+          diffuseColor *= sampleAtlas( map, vMapUv, vAtlas );
+        #endif
+      `)
+      .replace('#include <emissivemap_fragment>', /* glsl */`
+        #ifdef USE_EMISSIVEMAP
+          totalEmissiveRadiance *= sampleAtlas( emissiveMap, vEmissiveMapUv, vAtlas ).rgb;
+        #endif
+      `);
+  };
+  material.customProgramCacheKey = () => 'cityAtlas';
+  return material;
+}
+
+/**
+ * Materials for everything the city is built from.
+ *
+ * `surface` is the atlas material above. `prop` is for street furniture and
+ * vehicles, which are vertex-coloured solids. `glow` is unlit and additive —
+ * lamp panes, headlights, mast beacons — and fades in as the sun goes down.
+ */
+export function createCityMaterials(textures) {
+  const surface = applyAtlas(new THREE.MeshLambertMaterial({
+    map: textures.cityAtlas,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: textures.cityLights,
+    emissiveIntensity: 0,
+    vertexColors: true,
+    fog: true,
+  }));
+
+  // The paving is a few centimetres above the terrain it was laid on. At a
+  // grazing angle that is inside the depth buffer's resolution, so the ground
+  // gets its own copy of the material with a polygon offset.
+  const ground = applyAtlas(surface.clone());
+  ground.polygonOffset = true;
+  ground.polygonOffsetFactor = -4;
+  ground.polygonOffsetUnits = -4;
+
+  const prop = new THREE.MeshLambertMaterial({ vertexColors: true, fog: true });
+
+  const glow = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    fog: true,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  return {
+    surface, ground, prop, glow,
+    /**
+     * @param {number} night 0 by day, 1 after dark
+     * @param {THREE.Color} ambient sky ambient, so unlit props do not go black
+     */
+    setNight(night, ambient) {
+      surface.emissiveIntensity = night * 1.35;
+      ground.emissiveIntensity = night * 1.35;
+      glow.opacity = night;
+      if (ambient) prop.color.setRGB(
+        0.72 + ambient.r * 0.4,
+        0.72 + ambient.g * 0.4,
+        0.72 + ambient.b * 0.4,
+      );
+    },
+    dispose() {
+      surface.dispose();
+      ground.dispose();
+      prop.dispose();
+      glow.dispose();
+    },
+  };
+}
+
 export function createMaterials(textures, quality) {
   const ground = textures.ground.clone();
   ground.needsUpdate = true;

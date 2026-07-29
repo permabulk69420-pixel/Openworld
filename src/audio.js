@@ -3,8 +3,9 @@
  *
  * Wind through the valley is filtered noise with a slow gust envelope; water is
  * a second noise band that comes up as you approach the lake or the river;
- * birds call during the day and crickets take over at night. Footsteps are
- * short noise bursts shaped by whatever you are walking on.
+ * birds call during the day and crickets take over at night. The city adds a
+ * low traffic rumble and the odd distant horn. Footsteps are short noise bursts
+ * shaped by whatever you are walking on.
  *
  * Everything is started from a user gesture (the button that launches the
  * world), which is what browsers require.
@@ -19,6 +20,7 @@ export class Ambience {
     this.started = false;
     this._nextBird = 3;
     this._nextCricket = 1;
+    this._nextHorn = 12;
     this._stepDistance = 0;
   }
 
@@ -88,6 +90,20 @@ export class Ambience {
     this.waterGain.gain.value = 0;
     this.waterSource.connect(this.waterFilter).connect(this.waterHigh).connect(this.waterGain).connect(this.master);
     this.waterSource.start();
+
+    // --- the city -----------------------------------------------------------
+    // A low rumble of everything at once: tyres, plant rooms, distance.
+    this.citySource = ctx.createBufferSource();
+    this.citySource.buffer = buffer;
+    this.citySource.loop = true;
+    this.cityFilter = ctx.createBiquadFilter();
+    this.cityFilter.type = 'lowpass';
+    this.cityFilter.frequency.value = 220;
+    this.cityFilter.Q.value = 1.4;
+    this.cityGain = ctx.createGain();
+    this.cityGain.gain.value = 0;
+    this.citySource.connect(this.cityFilter).connect(this.cityGain).connect(this.master);
+    this.citySource.start();
   }
 
   setEnabled(on) {
@@ -115,16 +131,26 @@ export class Ambience {
     this.waterGain.gain.setTargetAtTime(level, t, 0.5);
     this.waterFilter.frequency.setTargetAtTime(700 + near * 700 + (s.riverNear ? 500 : 0), t, 0.6);
 
+    // The city, if we are in it.
+    const urban = clamp(s.urban || 0, 0, 1);
+    this.cityGain.gain.setTargetAtTime(Math.pow(urban, 1.3) * 0.16, t, 0.9);
+    this.cityFilter.frequency.setTargetAtTime(170 + urban * 260, t, 0.9);
+    this._nextHorn -= dt;
+    if (this._nextHorn <= 0) {
+      this._nextHorn = 5 + Math.random() * 16;
+      if (urban > 0.25 && Math.random() < urban) this.horn(urban);
+    }
+
     // Wildlife.
     this._nextBird -= dt;
     if (this._nextBird <= 0) {
       this._nextBird = 2.5 + Math.random() * 9;
-      if (s.daylight > 0.35 && s.altitude < 95 && Math.random() < 0.75) this.birdCall();
+      if (s.daylight > 0.35 && s.altitude < 95 && Math.random() < 0.75 * (1 - urban)) this.birdCall();
     }
     this._nextCricket -= dt;
     if (this._nextCricket <= 0) {
       this._nextCricket = 0.35 + Math.random() * 0.5;
-      if (s.daylight < 0.25 && s.altitude < 60) this.cricket();
+      if (s.daylight < 0.25 && s.altitude < 60 && Math.random() > urban) this.cricket();
     }
 
     // Footsteps, driven by distance travelled rather than a timer.
@@ -181,6 +207,31 @@ export class Ambience {
       default:
         this.noiseBurst(0.16, 'bandpass', 480 + Math.random() * 420, 1.1, 0.075);
     }
+  }
+
+  /** A car horn, somewhere out in the grid. Two detuned squares, short. */
+  horn(level) {
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const base = 320 + Math.random() * 180;
+    const length = 0.18 + Math.random() * 0.4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.016 * level, t + 0.02);
+    g.gain.setValueAtTime(0.016 * level, t + length * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1400;
+    for (const detune of [0, 1.19]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = base * (1 + detune * 0.5);
+      osc.connect(filter);
+      osc.start(t);
+      osc.stop(t + length + 0.05);
+    }
+    filter.connect(g).connect(this.master);
   }
 
   birdCall() {

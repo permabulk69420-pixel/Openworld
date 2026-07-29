@@ -1,11 +1,12 @@
 /**
  * Chunked, level-of-detail terrain.
  *
- * The world is a fixed 8x8 grid of 128 m chunks. Every chunk is always present
- * (so the mountain silhouette on the horizon never pops in) but its
- * tessellation is chosen from the distance to the player. Chunk edges get a
- * downward "skirt" so neighbouring chunks at different detail levels can't show
- * a crack of sky between them.
+ * The world is a fixed grid of 128 m chunks. Every chunk within the view
+ * distance is always present (so the mountain silhouette on the horizon never
+ * pops in) but its tessellation is chosen from the distance to the player, and
+ * anything past the view distance — where the fog is already opaque — is hidden
+ * rather than drawn. Chunk edges get a downward "skirt" so neighbouring chunks
+ * at different detail levels can't show a crack of sky between them.
  *
  * Geometry building is time-budgeted: the manager keeps a priority queue and
  * builds only as much as fits in the frame's spare milliseconds.
@@ -79,11 +80,26 @@ export class Terrain {
     this.queue.length = 0;
     for (const chunk of this.chunks) {
       const d = this.distanceToChunk(chunk, px, pz);
+      // Past the view distance the fog is already solid, so there is nothing to
+      // see: skip the geometry and, more to the point, skip the draw call.
+      const beyond = d > this.quality.viewDistance;
+      if (chunk.mesh) chunk.mesh.visible = !beyond;
+      if (beyond) {
+        chunk.pendingLod = chunk.lod;
+        continue;
+      }
       const lod = this.lodForDistance(d);
       chunk.pendingLod = lod;
       if (chunk.lod !== lod) this.queue.push({ chunk, lod, d });
     }
     this.queue.sort((a, b) => a.d - b.d);
+  }
+
+  /** How many chunks are actually being submitted right now. */
+  get visibleChunks() {
+    let n = 0;
+    for (const chunk of this.chunks) if (chunk.mesh && chunk.mesh.visible) n++;
+    return n;
   }
 
   /** Build queued chunks until the time budget runs out. Returns work left. */

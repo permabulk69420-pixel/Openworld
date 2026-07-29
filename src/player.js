@@ -7,6 +7,7 @@
  *   right stick L/R  smooth turn
  *   A                jump
  *   B                mount nearby hoverboard
+ *   Y                cycle time of day
  *
  * Quest / WebXR while mounted:
  *   left stick U/D   accelerate / reverse
@@ -18,6 +19,10 @@
  *
  * Desktop:
  *   W A S D + mouse, Shift run/boost, Space jump/thrust, E mount/dismount
+ *
+ * The ground the player stands on is the terrain or the top of whatever the
+ * city has built there, whichever is higher — so roofs, terraces and the piers
+ * are all real floors, and a building wall is simply a step too tall to climb.
  */
 
 import * as THREE from 'three';
@@ -37,7 +42,9 @@ export class Player {
     this.scene = scene;
     this.sampleSpacing = options.sampleSpacing || 2;
     this.hoverboard = options.hoverboard || null;
+    this.city = options.city || null;
     this.onNotice = options.onNotice || (() => {});
+    this.onCycleTime = options.onCycleTime || (() => {});
 
     this.rig = new THREE.Group();
     this.rig.name = 'playerRig';
@@ -185,7 +192,10 @@ export class Player {
   }
 
   groundHeight(x, z) {
-    return gridHeightAt(x, z, this.sampleSpacing);
+    const terrain = gridHeightAt(x, z, this.sampleSpacing);
+    if (!this.city) return terrain;
+    const built = this.city.solidHeightAt(x, z);
+    return built > terrain ? built : terrain;
   }
 
   toggleHoverboard() {
@@ -221,6 +231,11 @@ export class Player {
       this.toggleHoverboard();
       if (xr) this.pulse('right', 0.45, 45);
     }
+
+    const timeToggle = xr
+      ? !!input?.left && this.pressed('left', 5, input)
+      : this.justPressedKeys.has('KeyT');
+    if (timeToggle) this.onCycleTime();
 
     if (this.hoverboard?.mounted) {
       let forward = 0;

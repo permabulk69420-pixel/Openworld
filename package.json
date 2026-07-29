@@ -8,6 +8,16 @@
     "serve": "python3 -m http.server 8000",
     "preview": "node tools/preview.mjs 512 tools/preview.png"
   },
-  "keywords": ["webxr", "vr", "quest", "three.js", "procedural", "terrain"],
-  "license": "MIT"
+  "keywords": [
+    "webxr",
+    "vr",
+    "quest",
+    "three.js",
+    "procedural",
+    "terrain"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
 }
