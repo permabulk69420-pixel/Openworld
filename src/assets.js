@@ -1033,15 +1033,15 @@ export function makeLampGlow(height = 7.4, reach = 1.5) {
   paint(pane, '#ffd9a0', 0.0, () => 0.5);
   parts.push(pane);
 
-  const halo = new THREE.SphereGeometry(0.42, 8, 6);
+  const halo = new THREE.SphereGeometry(0.24, 6, 4);
   transform(halo, { x: reach, y: height - 0.32 });
-  paint(halo, '#3a2a12', 0.0, () => 0.5);
+  paint(halo, '#4a3416', 0.0, () => 0.5);
   parts.push(halo);
 
-  const pool = new THREE.CircleGeometry(5.2, 14).rotateX(-Math.PI / 2);
+  const pool = new THREE.CircleGeometry(7.0, 14).rotateX(-Math.PI / 2);
   transform(pool, { x: reach, y: 0.14 });
-  // Dim: additive, and it stacks with the neighbouring lamps' pools.
-  paint(pool, '#2a1d0c', 0.0, () => 0.5);
+  // Dim on its own: it is additive, and it stacks with its neighbours' pools.
+  paint(pool, '#3a2812', 0.0, () => 0.5);
   parts.push(pool);
 
   return merge(parts);

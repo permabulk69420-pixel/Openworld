@@ -11,11 +11,12 @@ desktop too. There is no build step and nothing is downloaded at runtime — eve
 texture, tree, rock, window and blade of grass is generated from a seed when the
 page loads.
 
-![The lake, looking north toward the peaks](screenshots/valley.jpg)
+![The city across the bay](screenshots/city.jpg)
 
 | | |
 |---|---|
-| ![Pine forest at the south shore](screenshots/forest.jpg) | ![Aurora over the lake](screenshots/aurora.jpg) |
+| ![The lake, looking north toward the peaks](screenshots/valley.jpg) | ![The gorge the road cuts through the valley rim](screenshots/pass.jpg) |
+| ![The central park, with downtown behind it](screenshots/park.jpg) | ![The skyline lit up under the aurora](screenshots/city-night.jpg) |
 
 ## Running it
 

@@ -381,12 +381,16 @@ export class Scatter {
         const zone = zoneAt(x, z).kind;
         if (zone !== ZONE.OUTSIDE && zone !== ZONE.PARK) continue;
         if (zone === ZONE.PARK) {
-          if (rnd() > 0.5 * density) continue;
+          // Sparser and more varied than the forest: a park is planted, not
+          // grown, and a uniform stand of birch poles looks like neither.
+          if (rnd() > 0.26 * density) continue;
           const y = this.plantHeight(sampler, x, z) - 0.12;
           const r = rnd();
-          const def = r < 0.62 ? (rnd() < 0.5 ? T.BIRCH : T.BIRCH_AUTUMN)
-            : [T.PINE_A, T.PINE_B, T.PINE_C][(rnd() * 3) | 0];
-          out.push(place(def, x, y, z, rnd() * Math.PI * 2, 7 + rnd() * 6, _normal, 0.95));
+          const def = r < 0.58 ? (rnd() < 0.62 ? T.BIRCH : T.BIRCH_AUTUMN)
+            : r < 0.94 ? [T.PINE_A, T.PINE_B, T.PINE_C][(rnd() * 3) | 0]
+              : T.STUMP;
+          const scale = def === T.STUMP ? 1.2 + rnd() * 0.6 : 4.5 + Math.pow(rnd(), 1.5) * 8;
+          out.push(place(def, x, y, z, rnd() * Math.PI * 2, scale, _normal, 0.95));
           continue;
         }
 

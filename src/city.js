@@ -134,10 +134,13 @@ class SurfaceBuilder {
    * A vertical panel running from A to B, with its own height at each end so it
    * can follow sloping ground. The front face is on the left of A→B.
    */
-  face(ax, az, bx, bz, yA0, yA1, yB0, yB1, tile, uOrigin, repeatU, repeatV, low, high) {
+  face(ax, az, bx, bz, yA0, yA1, yB0, yB1, tile, uOrigin, repeatU, repeatV, low, high, vBase = 0) {
     const length = Math.hypot(bx - ax, bz - az);
     const u0 = uOrigin;
     const u1 = uOrigin + length / repeatU;
+    // v is measured from vBase, not from world zero, so a building's window
+    // rows and its shopfront band line up with its own ground floor.
+    const v = (y) => (y - vBase) / repeatV;
 
     this.quad([
       ax, yA0, az,
@@ -145,8 +148,8 @@ class SurfaceBuilder {
       bx, yB1, bz,
       ax, yA1, az,
     ], [
-      u0, yA0 / repeatV, u1, yB0 / repeatV,
-      u1, yB1 / repeatV, u0, yA1 / repeatV,
+      u0, v(yA0), u1, v(yB0),
+      u1, v(yB1), u0, v(yA1),
     ], tile, [
       low[0], low[1], low[2],
       low[0], low[1], low[2],
@@ -160,7 +163,7 @@ class SurfaceBuilder {
    * `side` is 0 north (-Z), 1 east, 2 south, 3 west; `inward` flips it so a
    * parapet can be seen from the roof as well as from the street.
    */
-  wall(x0, z0, x1, z1, side, yBottom, yTop, tile, uOrigin, repeatU, repeatV, low, high, inward = false) {
+  wall(x0, z0, x1, z1, side, yBottom, yTop, tile, uOrigin, repeatU, repeatV, low, high, inward = false, vBase = 0) {
     let ax, az, bx, bz;
     if (side === 0) { ax = x1; az = z0; bx = x0; bz = z0; }
     else if (side === 1) { ax = x1; az = z1; bx = x1; bz = z0; }
@@ -170,7 +173,7 @@ class SurfaceBuilder {
       const tx = ax, tz = az;
       ax = bx; az = bz; bx = tx; bz = tz;
     }
-    this.face(ax, az, bx, bz, yBottom, yTop, yBottom, yTop, tile, uOrigin, repeatU, repeatV, low, high);
+    this.face(ax, az, bx, bz, yBottom, yTop, yBottom, yTop, tile, uOrigin, repeatU, repeatV, low, high, vBase);
   }
 
   /** A closed box — used for plant rooms, parapets, pilings and masts. */
@@ -242,14 +245,15 @@ function addBuilding(B, b, beacons) {
       if (t === 0 && podium > 0) {
         const pTop = ground + podium;
         B.wall(tier.x0, tier.z0, tier.x1, tier.z1, side, foot, pTop, TILE.PODIUM,
-          uOrigin, 21.6, 5.4, shade(tint, 0.9, _low), [tint[0], tint[1], tint[2]]);
+          uOrigin, 21.6, podium, shade(tint, 0.9, _low), [tint[0], tint[1], tint[2]],
+          false, ground);
         B.wall(tier.x0, tier.z0, tier.x1, tier.z1, side, pTop, y1, tile,
           uOrigin, repeatU, repeatV,
-          [...wallColor(pTop)], [...wallColor(y1)]);
+          [...wallColor(pTop)], [...wallColor(y1)], false, pTop);
       } else {
         B.wall(tier.x0, tier.z0, tier.x1, tier.z1, side, y0, y1, tile,
           uOrigin, repeatU, repeatV,
-          [...wallColor(y0)], [...wallColor(y1)]);
+          [...wallColor(y0)], [...wallColor(y1)], false, ground + podium);
       }
     }
 
@@ -381,9 +385,9 @@ function addBlockSurfaces(B, bi, bj) {
     { on: !streetSuppressed(bj + 1, midX), strip: [rect.x0 - s, rect.z1, rect.x1 + s, rect.z1 + s],
       edge: [rect.x0 - s, rect.z1 + s, rect.x1 + s, rect.z1 + s] },
     { on: !avenueSuppressed(bi, midZ), strip: [rect.x0 - s, rect.z0, rect.x0, rect.z1],
-      edge: [rect.x0 - s, rect.z1 + s, rect.x0 - s, rect.z0 - s] },
+      edge: [rect.x0 - s, rect.z0 - s, rect.x0 - s, rect.z1 + s] },
     { on: !avenueSuppressed(bi + 1, midZ), strip: [rect.x1, rect.z0, rect.x1 + s, rect.z1],
-      edge: [rect.x1 + s, rect.z0 - s, rect.x1 + s, rect.z1 + s] },
+      edge: [rect.x1 + s, rect.z1 + s, rect.x1 + s, rect.z0 - s] },
   ];
   const kerbLow = [0.78, 0.78, 0.76];
   const kerbHigh = [0.96, 0.96, 0.93];
@@ -603,7 +607,7 @@ export class City {
     this.scene = scene;
     this.textures = textures;
     this.materials = materials;
-    this.city = cityMaterials;
+    this.mats = cityMaterials;
     this.quality = quality;
 
     this.group = new THREE.Group();
@@ -653,7 +657,7 @@ export class City {
     for (const list of cells.values()) {
       const B = new SurfaceBuilder();
       for (const b of list) addBuilding(B, b, this.beacons);
-      const mesh = new THREE.Mesh(B.build(), this.city.surface);
+      const mesh = new THREE.Mesh(B.build(), this.mats.surface);
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
       this.triangles += B.i.length / 3;
@@ -674,7 +678,7 @@ export class City {
     addWaterfront(B);
     addHighway(B);
 
-    const mesh = new THREE.Mesh(B.build(), this.city.ground);
+    const mesh = new THREE.Mesh(B.build(), this.mats.ground);
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
     mesh.renderOrder = 1;
@@ -693,8 +697,8 @@ export class City {
 
     const lampGeo = makeStreetLamp(LAMP_HEIGHT, LAMP_REACH);
     const glowGeo = makeLampGlow(LAMP_HEIGHT, LAMP_REACH);
-    this.lampMesh = new THREE.InstancedMesh(lampGeo, this.city.prop, lampList.length);
-    this.lampGlow = new THREE.InstancedMesh(glowGeo, this.city.glow, lampList.length);
+    this.lampMesh = new THREE.InstancedMesh(lampGeo, this.mats.prop, lampList.length);
+    this.lampGlow = new THREE.InstancedMesh(glowGeo, this.mats.glow, lampList.length);
     this.lampGlow.renderOrder = 6;
 
     const m = new THREE.Matrix4();
@@ -734,8 +738,8 @@ export class City {
     const count = Math.round(190 * this.quality.scatterDensity);
     const body = makeCar(7);
     const lights = makeCarLights();
-    this.carMesh = new THREE.InstancedMesh(body, this.city.prop, count);
-    this.carLights = new THREE.InstancedMesh(lights, this.city.glow, count);
+    this.carMesh = new THREE.InstancedMesh(body, this.mats.prop, count);
+    this.carLights = new THREE.InstancedMesh(lights, this.mats.glow, count);
     this.carLights.renderOrder = 6;
     this.carMesh.frustumCulled = false;
     this.carLights.frustumCulled = false;
@@ -761,7 +765,7 @@ export class City {
 
     // Air traffic: a handful of shuttles on long circuits over the grid.
     const taxiCount = Math.max(3, Math.round(9 * this.quality.particles));
-    this.taxiMesh = new THREE.InstancedMesh(makeAirTaxi(4), this.city.prop, taxiCount);
+    this.taxiMesh = new THREE.InstancedMesh(makeAirTaxi(4), this.mats.prop, taxiCount);
     this.taxiMesh.frustumCulled = false;
     for (let i = 0; i < taxiCount; i++) {
       this.taxis.push({
@@ -779,7 +783,7 @@ export class City {
 
   buildBeacons() {
     const count = this.beacons.length + this.taxis.length;
-    this.beaconMesh = new THREE.InstancedMesh(makeBeacon(0.9), this.city.glow, Math.max(1, count));
+    this.beaconMesh = new THREE.InstancedMesh(makeBeacon(0.9), this.mats.glow, Math.max(1, count));
     this.beaconMesh.frustumCulled = false;
     this.beaconMesh.renderOrder = 6;
     this.group.add(this.beaconMesh);
@@ -800,7 +804,7 @@ export class City {
   update(dt, elapsed, head, daylight, ambient) {
     const night = clamp(1 - daylight * 1.5, 0, 1);
     this._night = night;
-    this.city.setNight(night, ambient);
+    this.mats.setNight(night, ambient);
 
     this.updateCars(dt, head);
     this.updateTaxis(elapsed);
