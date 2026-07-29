@@ -121,8 +121,9 @@ export class WebShooter {
 
     this.rayFromSource(web.source, hand, web.desktop, _origin, _direction);
     this.raycaster.set(_origin, _direction);
-    const hits = this.raycaster.intersectObjects(this.scene.children, true);
-    const hit = hits.find((candidate) => this.validHit(candidate));
+    const targets = this.collectTargets();
+    const hits = this.raycaster.intersectObjects(targets, false);
+    const hit = hits.find((candidate) => candidate.distance >= MIN_WEB_DISTANCE);
 
     if (!hit) {
       this.player.pulse(hand, 0.12, 24);
@@ -130,7 +131,7 @@ export class WebShooter {
     }
 
     web.anchor.copy(hit.point);
-    web.ropeLength = Math.max(MIN_WEB_DISTANCE, hit.distance * 0.97);
+    web.ropeLength = Math.max(MIN_WEB_DISTANCE, hit.distance * 0.995);
     web.active = true;
     web.line.visible = true;
     this.player.pulse(hand, 0.48, 42);
@@ -184,11 +185,16 @@ export class WebShooter {
     direction.normalize();
   }
 
-  validHit(hit) {
-    const object = hit.object;
-    if (!object || !object.visible || hit.distance < MIN_WEB_DISTANCE) return false;
-    if (object.isLine || object.isPoints || object.isSprite || object.isInstancedMesh) return false;
+  collectTargets() {
+    const targets = [];
+    this.scene.traverse((object) => {
+      if (!object.visible || !object.isMesh || object.isInstancedMesh) return;
+      if (this.validTarget(object)) targets.push(object);
+    });
+    return targets;
+  }
 
+  validTarget(object) {
     for (let node = object; node; node = node.parent) {
       if (node === this.root || node === this.player.rig || node === this.player.hoverboard?.group) return false;
       const name = (node.name || '').toLowerCase();
@@ -196,7 +202,6 @@ export class WebShooter {
         return false;
       }
     }
-
     return true;
   }
 
