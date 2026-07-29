@@ -5,6 +5,8 @@
  *   left stick       move relative to head direction
  *   left grip        run
  *   right stick L/R  smooth turn
+ *   left trigger     fire / hold left web
+ *   right trigger    fire / hold right web
  *   A                jump
  *   B                mount nearby hoverboard
  *   Y                cycle time of day
@@ -19,6 +21,7 @@
  *
  * Desktop:
  *   W A S D + mouse, Shift run/boost, Space jump/thrust, E mount/dismount
+ *   left / right mouse fire the matching web while on foot
  *
  * The ground the player stands on is the terrain or the top of whatever the
  * city has built there, whichever is higher — so roofs, terraces and the piers
@@ -29,11 +32,13 @@ import * as THREE from 'three';
 import { PLAYER } from './config.js';
 import { WORLD, gridHeightAt, normalAt } from './world.js';
 import { waterLevelAt } from './water.js';
+import { WebShooter } from './webs.js';
 import { lerp } from './noise.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _moveIntent = new THREE.Vector3();
 
 export class Player {
   constructor(renderer, camera, scene, options = {}) {
@@ -60,6 +65,7 @@ export class Player {
 
     this.keys = new Set();
     this.justPressedKeys = new Set();
+    this.mouseButtons = new Set();
     this.yaw = options.yaw ?? 0;
     this.pitch = 0;
     this.pointerLocked = false;
@@ -70,6 +76,7 @@ export class Player {
     camera.position.set(0, PLAYER.eyeHeight, 0);
 
     this.buildControllers();
+    this.webs = new WebShooter(scene, this);
     this.bindDesktop();
   }
 
@@ -121,8 +128,21 @@ export class Player {
       this.pitch = THREE.MathUtils.clamp(this.pitch - event.movementY * 0.0022, -1.4, 1.4);
     };
 
+    this._onMouseDown = (event) => {
+      if (!this.pointerLocked) return;
+      this.mouseButtons.add(event.button);
+      event.preventDefault();
+    };
+
+    this._onMouseUp = (event) => this.mouseButtons.delete(event.button);
+
+    this._onContextMenu = (event) => {
+      if (this.pointerLocked) event.preventDefault();
+    };
+
     this._onPointerLockChange = () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      if (!this.pointerLocked) this.mouseButtons.clear();
     };
 
     this._onCanvasClick = () => {
@@ -132,7 +152,10 @@ export class Player {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('mousemove', this._onMouseMove);
+    window.addEventListener('mouseup', this._onMouseUp);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
+    canvas.addEventListener('mousedown', this._onMouseDown);
+    canvas.addEventListener('contextmenu', this._onContextMenu);
     canvas.addEventListener('click', this._onCanvasClick);
   }
 
@@ -141,7 +164,8 @@ export class Player {
     const state = { left: null, right: null };
     if (!session) return state;
 
-    for (const source of session.inputSources) {
+    for (let sourceIndex = 0; sourceIndex < session.inputSources.length; sourceIndex++) {
+      const source = session.inputSources[sourceIndex];
       const gamepad = source.gamepad;
       if (!gamepad || !source.handedness) continue;
 
@@ -150,7 +174,12 @@ export class Player {
         : [gamepad.axes[0] || 0, gamepad.axes[1] || 0];
       const buttons = gamepad.buttons.map((button) => button.pressed);
       const values = gamepad.buttons.map((button) => button.value);
-      const handState = { axes, buttons, values };
+      const handState = {
+        axes,
+        buttons,
+        values,
+        controller: this.controllers[sourceIndex] || null,
+      };
 
       if (source.handedness === 'left') state.left = handState;
       if (source.handedness === 'right') state.right = handState;
@@ -206,9 +235,12 @@ export class Player {
       return;
     }
 
-    if (!this.hoverboard.mount(this)) {
-      this.onNotice('Move closer to the hoverboard');
+    if (this.hoverboard.mount(this)) {
+      this.webs.releaseAll(true);
+      return;
     }
+
+    this.onNotice('Move closer to the hoverboard');
   }
 
   finishInputFrame(input) {
@@ -238,6 +270,7 @@ export class Player {
     if (timeToggle) this.onCycleTime();
 
     if (this.hoverboard?.mounted) {
+      this.webs.releaseAll(true);
       let forward = 0;
       let steer = 0;
       let turn = 0;
@@ -306,6 +339,8 @@ export class Player {
       this.camera.position.y = this.headHeight;
     }
 
+    this.webs.updateInput(input, xr, this.mouseButtons);
+
     const forward = this.headingVector(_v);
     const right = _v2.copy(forward).cross(UP).normalize();
 
@@ -316,16 +351,31 @@ export class Player {
       inputLength = 1;
     }
 
+    let directionX = 0;
+    let directionZ = 0;
+    if (inputLength > 0) {
+      directionX = right.x * moveX - forward.x * moveZ;
+      directionZ = right.z * moveX - forward.z * moveZ;
+      const length = Math.hypot(directionX, directionZ) || 1;
+      directionX = (directionX / length) * inputLength;
+      directionZ = (directionZ / length) * inputLength;
+    }
+    _moveIntent.set(directionX, 0, directionZ);
+
+    if (this.webs.shouldSimulate()) {
+      this.webs.updatePhysics(dt, _moveIntent, sprint);
+      this.headHeight = xr ? this.camera.position.y : PLAYER.eyeHeight;
+      this.finishInputFrame(input);
+      return;
+    }
+
     const baseSpeed = sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
     const moveSpeed = this.swimming ? baseSpeed * 0.45 : baseSpeed;
     const step = moveSpeed * dt * inputLength;
 
     if (step > 0) {
-      const directionX = right.x * moveX - forward.x * moveZ;
-      const directionZ = right.z * moveX - forward.z * moveZ;
-      const length = Math.hypot(directionX, directionZ) || 1;
-      const nextX = this.rig.position.x + (directionX / length) * step;
-      const nextZ = this.rig.position.z + (directionZ / length) * step;
+      const nextX = this.rig.position.x + directionX * moveSpeed * dt;
+      const nextZ = this.rig.position.z + directionZ * moveSpeed * dt;
 
       if (this.canStep(nextX, nextZ)) {
         this.rig.position.x = nextX;
@@ -404,6 +454,11 @@ export class Player {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('mousemove', this._onMouseMove);
+    window.removeEventListener('mouseup', this._onMouseUp);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
+    this.renderer.domElement.removeEventListener('mousedown', this._onMouseDown);
+    this.renderer.domElement.removeEventListener('contextmenu', this._onContextMenu);
+    this.renderer.domElement.removeEventListener('click', this._onCanvasClick);
+    this.webs.dispose();
   }
 }
