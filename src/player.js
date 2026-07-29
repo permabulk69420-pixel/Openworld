@@ -91,6 +91,12 @@ export class Player {
 
     for (let i = 0; i < 2; i++) {
       const controller = this.renderer.xr.getController(i);
+      controller.addEventListener('connected', (event) => {
+        controller.userData.handedness = event.data?.handedness || '';
+      });
+      controller.addEventListener('disconnected', () => {
+        controller.userData.handedness = '';
+      });
       this.rig.add(controller);
       this.controllers.push(controller);
 
@@ -178,7 +184,9 @@ export class Player {
         axes,
         buttons,
         values,
-        controller: this.controllers[sourceIndex] || null,
+        controller: this.controllers.find((controller) => controller.userData.handedness === source.handedness)
+          || this.controllers[sourceIndex]
+          || null,
       };
 
       if (source.handedness === 'left') state.left = handState;
