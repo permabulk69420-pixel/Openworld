@@ -134,6 +134,14 @@ export class WristPanel {
     ctx.fillText(state.compass, 22, 80);
     ctx.fillText(`${state.altitude} m`, 22, 112);
 
+    if (state.place) {
+      ctx.textAlign = 'right';
+      ctx.font = '600 24px ui-sans-serif, system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(196, 226, 246, 0.9)';
+      ctx.fillText(state.place, w - 24, 30);
+      ctx.textAlign = 'left';
+    }
+
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(150, 185, 215, 0.6)';
     ctx.font = '500 20px ui-sans-serif, system-ui, sans-serif';

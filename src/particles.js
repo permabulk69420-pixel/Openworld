@@ -242,8 +242,9 @@ export class Atmosphere {
    * @param {number} time seconds
    * @param {THREE.Vector3} head world position of the viewer
    * @param {number} daylight 0..1
+   * @param {number} wild 1 in open country, 0 in the middle of the city
    */
-  update(time, head, daylight) {
+  update(time, head, daylight, wild = 1) {
     const altitude = head.y;
     const snowiness = smoothstep(WORLD.snowLine - 26, WORLD.snowLine + 4, altitude);
     const lowland = 1 - smoothstep(30, 62, altitude);
@@ -255,7 +256,7 @@ export class Atmosphere {
 
     this.dust.opacity = lerp(this.dust.opacity, (1 - snowiness) * daylight * 0.34, 0.05);
     this.snow.opacity = lerp(this.snow.opacity, snowiness * 0.55, 0.05);
-    this.fireflies.opacity = lerp(this.fireflies.opacity, (1 - daylight) * lowland * 0.85, 0.03);
+    this.fireflies.opacity = lerp(this.fireflies.opacity, (1 - daylight) * lowland * wild * 0.85, 0.03);
     this.birds.mesh.visible = daylight > 0.15;
   }
 }

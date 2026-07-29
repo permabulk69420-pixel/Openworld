@@ -1,7 +1,11 @@
 /**
- * Entry point: builds the valley, then runs it.
+ * Entry point: builds the world, then runs it.
  *
- * The world is generated while the start screen is still up, so pressing
+ * There are two places to be: the valley the project started as, and the city
+ * on the plain south of it. They share one height field, one player, one
+ * hoverboard and one sky — the road through the pass is the seam.
+ *
+ * Everything is generated while the start screen is still up, so pressing
  * "Enter VR" can go straight into an immersive session from the click — which
  * is what browsers require for XR.
  */
@@ -9,8 +13,10 @@
 import * as THREE from 'three';
 import { QUALITY } from './config.js';
 import { WORLD, gridHeightAt, biomeAt, BIOME, riverDistanceAt, LAKE, RIVER_WIDTH } from './world.js';
+import { CITY, CITY_BOUNDS, zoneAt, ZONE } from './citymap.js';
 import { createTextures } from './assets.js';
-import { createMaterials } from './materials.js';
+import { createMaterials, createCityMaterials } from './materials.js';
+import { City } from './city.js';
 import { Terrain } from './terrain.js';
 import { Scatter } from './scatter.js';
 import { Water } from './water.js';
@@ -50,7 +56,9 @@ renderer.xr.setReferenceSpaceType('local-floor');
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 4000);
+// Far enough to reach the open sea, which has to run past the point where the
+// fog is solid or the horizon shows a seam between water and sky.
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 9000);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -65,9 +73,9 @@ window.addEventListener('resize', () => {
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
 const state = {
-  textures: null, materials: null, terrain: null, scatter: null,
-  water: null, sky: null, atmosphere: null, hoverboard: null,
-  player: null, wrist: null,
+  textures: null, materials: null, cityMaterials: null, terrain: null,
+  scatter: null, water: null, sky: null, atmosphere: null, city: null,
+  hoverboard: null, player: null, wrist: null,
 };
 
 const audio = new Ambience();
@@ -81,29 +89,36 @@ async function build() {
   state.textures = createTextures();
   state.materials = createMaterials(state.textures, quality);
 
-  ui.progress(0.10, 'Raising the mountains…');
+  ui.progress(0.06, 'Raising the mountains…');
   await nextFrame();
   state.terrain = new Terrain(scene, quality, state.materials.terrain);
   state.terrain.refresh(WORLD.spawn.x, WORLD.spawn.z);
 
-  // Build every chunk before the first frame so the horizon is complete.
-  const total = state.terrain.totalChunks;
+  // Build every chunk in view before the first frame so the horizon is complete.
+  const total = Math.max(1, state.terrain.queue.length);
   while (state.terrain.processQueue(10) > 0) {
     const done = total - state.terrain.queue.length;
-    ui.progress(0.10 + 0.42 * (done / total), `Raising the mountains… ${done}/${total}`);
+    ui.progress(0.06 + 0.26 * (done / total), `Raising the mountains… ${done}/${total}`);
     await nextFrame();
   }
 
-  ui.progress(0.56, 'Filling the lake…');
+  ui.progress(0.33, 'Filling the lake…');
   await nextFrame();
   state.water = new Water(scene, state.textures);
 
-  ui.progress(0.66, 'Lighting the sky…');
+  ui.progress(0.40, 'Lighting the sky…');
   await nextFrame();
   state.sky = new Sky(scene, state.textures, 0.33);
   state.sky.setFogDensity(quality === QUALITY.low ? 0.0035 : quality === QUALITY.medium ? 0.0024 : 0.0017);
 
-  ui.progress(0.72, 'Planting the forest…');
+  state.cityMaterials = createCityMaterials(state.textures);
+  state.city = new City(scene, state.textures, state.materials, state.cityMaterials, quality);
+  await state.city.build(
+    (fraction, text) => ui.progress(0.42 + 0.30 * fraction, text),
+    nextFrame,
+  );
+
+  ui.progress(0.73, 'Planting the forest…');
   await nextFrame();
   state.scatter = new Scatter(scene, state.materials, quality, state.terrain.sampleSpacing);
 
@@ -111,7 +126,7 @@ async function build() {
   for (let i = 0; i < 40; i++) {
     state.scatter.update(WORLD.spawn.x, WORLD.spawn.z, 12);
     const pending = state.scatter.fields.reduce((n, f) => n + f.pendingCells.length, 0);
-    ui.progress(0.72 + 0.18 * clamp(1 - pending / 90, 0, 1), 'Planting the forest…');
+    ui.progress(0.73 + 0.17 * clamp(1 - pending / 90, 0, 1), 'Planting the forest…');
     if (pending === 0) break;
     await nextFrame();
   }
@@ -120,6 +135,7 @@ async function build() {
   await nextFrame();
   state.hoverboard = new Hoverboard(scene, state.terrain.sampleSpacing, {
     onNotice: (text) => ui.showNotice(text),
+    city: state.city,
   });
   await state.hoverboard.load();
 
@@ -129,7 +145,9 @@ async function build() {
   state.player = new Player(renderer, camera, scene, {
     sampleSpacing: state.terrain.sampleSpacing,
     hoverboard: state.hoverboard,
+    city: state.city,
     onNotice: (text) => ui.showNotice(text),
+    onCycleTime: () => cycleTime(),
   });
   state.wrist = new WristPanel(state.player.grips[0]);
 
@@ -140,17 +158,23 @@ async function build() {
 
 /**
  * Handle for poking at the world from the console or a test script:
- *   openworld.teleport(x, z, yaw)   openworld.setTime(0.5)
+ *   openworld.teleport(x, z, yaw)   openworld.downtown()   openworld.setTime(0.5)
  */
 window.openworld = {
   THREE, scene, camera, renderer, state, quality, perf,
   teleport(x, z, yaw) {
-    state.player.rig.position.set(x, gridHeightAt(x, z, state.terrain.sampleSpacing), z);
+    const ground = Math.max(
+      gridHeightAt(x, z, state.terrain.sampleSpacing),
+      state.city.solidHeightAt(x, z),
+    );
+    state.player.rig.position.set(x, ground, z);
     if (yaw !== undefined) state.player.yaw = yaw;
     state.terrain.refresh(x, z);
     while (state.terrain.processQueue(1000) > 0);
     for (let i = 0; i < 60; i++) state.scatter.update(x, z, 1000);
   },
+  downtown() { this.teleport(CITY.x - 150, CITY.z + 30, Math.PI * 0.5); },
+  pass() { this.teleport(-424, 506, Math.PI); },
   setTime(t) { state.sky.time = t; },
 };
 
@@ -183,7 +207,7 @@ async function checkXR() {
   if (supported) {
     ui.enterVR.disabled = false;
     ui.enterVR.textContent = 'Enter VR';
-    ui.setNote('The hoverboard is waiting beside the spawn point. Walk over and press B to mount it.');
+    ui.setNote('The hoverboard is waiting beside the spawn point. Press B to mount it, then follow the road south — the city is over the pass.');
   } else {
     ui.enterVR.textContent = 'No headset detected';
     ui.setNote('No immersive-vr device was reported. Open this page in the Quest browser over https, or use the desktop controls to test it.');
@@ -230,12 +254,26 @@ let fpsAccum = 0;
 let fpsFrames = 0;
 
 function surfaceUnder(x, z) {
+  const zone = zoneAt(x, z).kind;
+  if (zone !== ZONE.OUTSIDE && zone !== ZONE.PARK) return 'rock';
+  // Standing on a roof or a pier counts as a hard surface too.
+  if (state.city.solidHeightAt(x, z) > -Infinity) return 'rock';
   const h = gridHeightAt(x, z, state.terrain.sampleSpacing);
   const biome = biomeAt(x, z, h);
   if (biome === BIOME.SNOW) return 'snow';
   if (biome === BIOME.ROCK || biome === BIOME.ALPINE) return 'rock';
   if (biome === BIOME.SHORE) return 'rock';
   return 'grass';
+}
+
+/** 0 in open country, 1 deep in the city — drives ambience and particles. */
+function urbanFactor(x, z) {
+  const inside = x > CITY_BOUNDS.minX - 220 && x < CITY_BOUNDS.maxX + 220
+    && z > CITY_BOUNDS.minZ - 220 && z < CITY_BOUNDS.maxZ + 220;
+  if (!inside) return 0;
+  const dx = Math.max(0, Math.abs(x - CITY.x) - CITY.halfX);
+  const dz = Math.max(0, Math.abs(z - CITY.z) - CITY.halfZ);
+  return clamp(1 - Math.hypot(dx, dz) / 220, 0, 1);
 }
 
 let lastFrameTime = 0;
@@ -262,11 +300,14 @@ function tick(timestamp) {
 
   state.terrain.update(head.x, head.z, 3);
   state.scatter.update(head.x, head.z, 3);
-  state.atmosphere.update(elapsed, head, state.sky.daylight);
 
   // Ambience needs to know how close the water is and what is underfoot.
   const px = state.player.rig.position.x;
   const pz = state.player.rig.position.z;
+  const urban = urbanFactor(px, pz);
+
+  state.atmosphere.update(elapsed, head, state.sky.daylight, 1 - urban);
+  state.city.update(dt, elapsed, head, state.sky.daylight, state.sky.ambientColor);
   const lakeDistance = Math.max(0, Math.hypot(px - LAKE.x, pz - LAKE.z) - LAKE.radius * 0.92);
   const riverDistance = riverDistanceAt(px, pz) - RIVER_WIDTH;
   audio.update(dt, {
@@ -279,6 +320,7 @@ function tick(timestamp) {
     grounded: state.player.grounded,
     speed: state.player.speed,
     surface: state.player.swimming ? 'water' : surfaceUnder(px, pz),
+    urban,
   });
 
   fpsAccum += dt;
@@ -287,10 +329,12 @@ function tick(timestamp) {
     fps = Math.round(fpsFrames / fpsAccum);
     fpsAccum = 0;
     fpsFrames = 0;
+    const place = state.city.placeName(px, pz);
     ui.setStats(
       `${fps} fps   ${qualityName}${state.hoverboard.mounted ? '   BOARD' : ''}\n` +
-      `${formatClock(state.sky.time)}   ${Math.round(state.player.rig.position.y)} m\n` +
-      `${state.scatter.instanceCount} instances`,
+      `${formatClock(state.sky.time)}   ${Math.round(state.player.rig.position.y)} m` +
+      `${place ? `   ${place}` : ''}\n` +
+      `${state.scatter.instanceCount} instances   ${state.terrain.visibleChunks} chunks`,
     );
   }
 
@@ -304,6 +348,7 @@ function tick(timestamp) {
     clock: formatClock(state.sky.time),
     compass: formatCompass(heading),
     altitude: Math.round(state.player.rig.position.y),
+    place: state.city.placeName(px, pz),
     fps: `${fps} fps`,
   });
 

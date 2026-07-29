@@ -4,7 +4,7 @@
  */
 
 export const CHUNK_SIZE = 128;      // metres per terrain chunk
-export const CHUNK_GRID = 8;        // 8 x 8 chunks = 1024 m world
+export const CHUNK_GRID = 20;       // 20 x 20 chunks = 2560 m world
 
 export const QUALITY = {
   low: {

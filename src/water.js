@@ -13,9 +13,21 @@
 
 import * as THREE from 'three';
 import {
-  WORLD, heightAt, RIVER_PATH, RIVER_TOTAL, RIVER_WIDTH, riverSurfaceAt, waterSurfaceAt,
+  WORLD, VALLEY_HALF, heightAt, RIVER_PATH, RIVER_TOTAL, RIVER_WIDTH,
+  riverSurfaceAt, waterSurfaceAt,
 } from './world.js';
+import { CITY } from './citymap.js';
 import { clamp, smoothstep } from './noise.js';
+
+/**
+ * Where standing water is worth looking for. Scanning the whole 2.5 km world at
+ * the resolution the shoreline needs would cost a second of load time for no
+ * gain, so only the two basins that can actually hold water are searched.
+ */
+const BASINS = [
+  { minX: -VALLEY_HALF, maxX: VALLEY_HALF, minZ: -VALLEY_HALF, maxZ: VALLEY_HALF },
+  { minX: -WORLD.half, maxX: WORLD.half, minZ: CITY.shore - 60, maxZ: WORLD.half },
+];
 
 const VERT = /* glsl */`
   attribute float aDepth;
@@ -143,6 +155,12 @@ export class Water {
     this.river = new THREE.Mesh(buildRiver(), this.material);
     this.river.renderOrder = 2;
     this.group.add(this.river);
+
+    // Open sea past the south edge of the map, so the bay runs out to the fog
+    // instead of stopping at a cliff of nothing.
+    this.ocean = new THREE.Mesh(buildOpenSea(), this.material);
+    this.ocean.renderOrder = 2;
+    this.group.add(this.ocean);
   }
 
   update(time) {
@@ -168,11 +186,21 @@ export class Water {
  */
 function buildStillWater(step = 5) {
   const n = Math.round(WORLD.size / step) + 1;
-  const heights = new Float32Array(n * n);
-  for (let j = 0; j < n; j++) {
-    const z = -WORLD.half + j * step;
-    for (let i = 0; i < n; i++) {
-      heights[j * n + i] = heightAt(-WORLD.half + i * step, z);
+  const heights = new Float32Array(n * n).fill(9999);
+  const cellRange = (basin) => ({
+    i0: Math.max(0, Math.floor((basin.minX + WORLD.half) / step)),
+    i1: Math.min(n - 1, Math.ceil((basin.maxX + WORLD.half) / step)),
+    j0: Math.max(0, Math.floor((basin.minZ + WORLD.half) / step)),
+    j1: Math.min(n - 1, Math.ceil((basin.maxZ + WORLD.half) / step)),
+  });
+
+  for (const basin of BASINS) {
+    const { i0, i1, j0, j1 } = cellRange(basin);
+    for (let j = j0; j <= j1; j++) {
+      const z = -WORLD.half + j * step;
+      for (let i = i0; i <= i1; i++) {
+        heights[j * n + i] = heightAt(-WORLD.half + i * step, z);
+      }
     }
   }
 
@@ -196,8 +224,10 @@ function buildStillWater(step = 5) {
     return id;
   };
 
-  for (let j = 0; j < n - 1; j++) {
-    for (let i = 0; i < n - 1; i++) {
+  for (const basin of BASINS) {
+  const { i0, i1, j0, j1 } = cellRange(basin);
+  for (let j = j0; j < j1; j++) {
+    for (let i = i0; i < i1; i++) {
       const h00 = heights[j * n + i];
       const h10 = heights[j * n + i + 1];
       const h01 = heights[(j + 1) * n + i];
@@ -208,6 +238,47 @@ function buildStillWater(step = 5) {
       const c = addVertex(i, j + 1);
       const d = addVertex(i + 1, j + 1);
       indices.push(a, c, b, b, c, d);
+    }
+  }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('aDepth', new THREE.Float32BufferAttribute(depths, 1));
+  geometry.setAttribute('aFlow', new THREE.Float32BufferAttribute(flows, 2));
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+/**
+ * The sea beyond the map. A single coarse sheet at sea level, far enough out
+ * that the fog swallows it long before its edge; the terrain occludes it
+ * wherever the land is above the water line, so the shore stays exact.
+ */
+function buildOpenSea(reach = 8000, divisions = 28) {
+  const z0 = WORLD.half - 6;
+  const positions = [];
+  const depths = [];
+  const flows = [];
+  const indices = [];
+  const n = divisions + 1;
+
+  for (let j = 0; j <= divisions; j++) {
+    // Squared spacing: dense near the shore, enormous at the horizon.
+    const t = j / divisions;
+    const z = z0 + (reach - z0) * t * t;
+    for (let i = 0; i <= divisions; i++) {
+      const x = -reach + (2 * reach) * (i / divisions);
+      positions.push(x, WORLD.seaLevel, z);
+      depths.push(24);
+      flows.push(0.10, 0.04);
+    }
+  }
+  for (let j = 0; j < divisions; j++) {
+    for (let i = 0; i < divisions; i++) {
+      const a = j * n + i;
+      indices.push(a, a + n, a + 1, a + 1, a + n, a + n + 1);
     }
   }
 

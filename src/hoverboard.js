@@ -1,10 +1,19 @@
+/**
+ * The hoverboard: the only vehicle, and the reason the city is worth having.
+ *
+ * It rides whatever surface is under it — terrain, water, or a rooftop — and it
+ * cannot fly through a building: a wall in the way stops the board and lets it
+ * slide along, which is what makes threading the avenues feel like flying and
+ * not like clipping.
+ */
+
 import * as THREE from 'three';
-import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/loaders/GLTFLoader.js';
 import { WORLD, gridHeightAt } from './world.js';
 import { waterLevelAt } from './water.js';
 import { clamp, lerp } from './noise.js';
 
 const MODEL_URL = './assets/models/hoverboard/Generic_Futuristic_Hoverboard.glb';
+const LOADER_URL = 'https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/loaders/GLTFLoader.js';
 const HOVER_HEIGHT = 0.62;
 const RIDER_FOOT_HEIGHT = 0.125;
 const MOUNT_RANGE = 2.4;
@@ -17,6 +26,8 @@ export class Hoverboard {
     this.scene = scene;
     this.sampleSpacing = sampleSpacing || 2;
     this.onNotice = options.onNotice || (() => {});
+    this.city = options.city || null;
+    this.bumped = 0;
 
     this.group = new THREE.Group();
     this.group.name = 'hoverboardPhysicsRoot';
@@ -36,6 +47,11 @@ export class Hoverboard {
 
   async load() {
     try {
+      // Imported at load time rather than at module scope: GLTFLoader is the
+      // one thing in the project that is fetched from a CDN, and a static
+      // import would take the whole world down with it when that is not
+      // reachable. This way an offline run just gets the fallback board.
+      const { GLTFLoader } = await import(/* @vite-ignore */ LOADER_URL);
       const loader = new GLTFLoader();
       const gltf = await loader.loadAsync(MODEL_URL);
       const model = gltf.scene;
@@ -106,7 +122,15 @@ export class Hoverboard {
   surfaceY(x, z) {
     const ground = gridHeightAt(x, z, this.sampleSpacing);
     const water = waterLevelAt(x, z, ground);
-    return water === null ? ground : Math.max(ground, water);
+    const natural = water === null ? ground : Math.max(ground, water);
+    if (!this.city) return natural;
+    const built = this.city.solidHeightAt(x, z);
+    return built > natural ? built : natural;
+  }
+
+  /** True if a wall (rather than a roof below us) occupies this spot. */
+  obstructed(x, z, y) {
+    return !!this.city && this.city.solidHeightAt(x, z) > y - 0.35;
   }
 
   distanceTo(position) {
@@ -186,7 +210,29 @@ export class Hoverboard {
     this.yaw -= steer * turnRate * dt;
 
     _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    this.group.position.addScaledVector(_forward, this.forwardSpeed * dt);
+    const step = this.forwardSpeed * dt;
+    const y = this.group.position.y;
+    const nextX = this.group.position.x + _forward.x * step;
+    const nextZ = this.group.position.z + _forward.z * step;
+
+    // Buildings are solid. Try the full move, then each axis on its own, so a
+    // glancing hit slides along the facade instead of stopping dead.
+    if (!this.obstructed(nextX, nextZ, y)) {
+      this.group.position.x = nextX;
+      this.group.position.z = nextZ;
+    } else if (!this.obstructed(nextX, this.group.position.z, y)) {
+      this.group.position.x = nextX;
+      this.forwardSpeed *= 0.86;
+      this.bumped = 1;
+    } else if (!this.obstructed(this.group.position.x, nextZ, y)) {
+      this.group.position.z = nextZ;
+      this.forwardSpeed *= 0.86;
+      this.bumped = 1;
+    } else {
+      this.forwardSpeed *= 0.3;
+      this.bumped = 1;
+    }
+
     this.group.position.x = clamp(this.group.position.x, -WORLD.half + 12, WORLD.half - 12);
     this.group.position.z = clamp(this.group.position.z, -WORLD.half + 12, WORLD.half - 12);
 
@@ -218,6 +264,12 @@ export class Hoverboard {
 
     this.setGlow(1.3 + lift * 4.0 + speedRatio * 1.8 + (boost ? 1.4 : 0));
     this.syncRider(player);
+
+    if (this.bumped) {
+      this.bumped = 0;
+      player.pulse('left', 0.5, 40);
+      player.pulse('right', 0.5, 40);
+    }
 
     player.speed = Math.abs(this.forwardSpeed);
     player.swimming = false;

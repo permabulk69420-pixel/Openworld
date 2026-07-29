@@ -8,6 +8,7 @@
 import zlib from 'node:zlib';
 import fs from 'node:fs';
 import { WORLD, heightAt, slopeAt, surfaceColor, moistureAt, biomeAt, riverDistanceAt, riverArcAt, riverSurfaceAt, RIVER_WIDTH } from '../src/world.js';
+import { CITY, forEachBlock, buildingsInBlock, zoneAt, ZONE } from '../src/citymap.js';
 import { clamp } from '../src/noise.js';
 
 const SIZE = parseInt(process.argv[2] || '512', 10);
@@ -92,7 +93,12 @@ for (let j = 0; j < SIZE; j++) {
     let r, g, b;
     const dRiver = riverDistanceAt(x, z);
     const riverSurf = riverSurfaceAt(riverArcAt(x, z));
-    if (h < WORLD.seaLevel) {
+    const zone = zoneAt(x, z).kind;
+    if (zone === ZONE.ROAD || zone === ZONE.HIGHWAY) {
+      r = 0.20; g = 0.20; b = 0.22;
+    } else if (zone === ZONE.PAVEMENT || zone === ZONE.PLAZA) {
+      r = 0.46; g = 0.45; b = 0.43;
+    } else if (h < WORLD.seaLevel) {
       // Lake: depth-tinted blue.
       const t = clamp(-h / 12, 0, 1);
       r = 0.16 - 0.08 * t; g = 0.32 - 0.16 * t; b = 0.40 - 0.14 * t;
@@ -109,6 +115,24 @@ for (let j = 0; j < SIZE; j++) {
     px[o + 2] = clamp(Math.sqrt(b), 0, 1) * 255;
   }
 }
+
+// Building footprints, shaded by height so the skyline reads on the map.
+forEachBlock((bi, bj) => {
+  for (const b of buildingsInBlock(bi, bj)) {
+    const i0 = Math.round((b.x0 + WORLD.half) / step);
+    const i1 = Math.round((b.x1 + WORLD.half) / step);
+    const j0 = Math.round((b.z0 + WORLD.half) / step);
+    const j1 = Math.round((b.z1 + WORLD.half) / step);
+    const v = clamp(0.35 + b.top / 200, 0, 1);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        if (i < 0 || j < 0 || i >= SIZE || j >= SIZE) continue;
+        const o = (j * SIZE + i) * 3;
+        px[o] = 235 * v; px[o + 1] = 232 * v; px[o + 2] = 226 * v;
+      }
+    }
+  }
+});
 
 // Mark the spawn point.
 const sx = Math.round((WORLD.spawn.x + WORLD.half) / step);
@@ -142,3 +166,12 @@ console.log(`wrote ${OUT} (${SIZE}x${SIZE})`);
 console.log(`height range: ${minH.toFixed(1)}m .. ${maxH.toFixed(1)}m`);
 console.log(`water ${(100 * water / total).toFixed(1)}%  forest ${(100 * forest / total).toFixed(1)}%  snow ${(100 * snow / total).toFixed(1)}%`);
 console.log(`spawn height: ${heightAt(WORLD.spawn.x, WORLD.spawn.z).toFixed(2)}m`);
+
+let buildings = 0, tallest = 0;
+forEachBlock((bi, bj) => {
+  for (const b of buildingsInBlock(bi, bj)) {
+    buildings++;
+    if (b.top > tallest) tallest = b.top;
+  }
+});
+console.log(`city: ${buildings} buildings, tallest ${tallest.toFixed(0)}m, centre (${CITY.x}, ${CITY.z})`);

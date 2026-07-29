@@ -201,6 +201,405 @@ function makeWaterNoiseTexture(size = 128) {
   return tex;
 }
 
+// ---------------------------------------------------------------------------
+// City surface atlas
+// ---------------------------------------------------------------------------
+
+/**
+ * One 4x4 atlas covers every man-made surface in the city: facades, roofs,
+ * tarmac, pavement, decking. Everything the city draws therefore shares a
+ * single material, which is what keeps a whole downtown down to a couple of
+ * dozen draw calls.
+ *
+ * The tiles are designed to repeat: `TILE_WINDOWS` bays across and the same
+ * number of floors up, so a wall's UVs are just (metres / bay, metres / floor)
+ * and the shader wraps them inside the tile. See `applyAtlas` in materials.js.
+ */
+export const TILE = {
+  GLASS: 0, BRONZE: 1, OFFICE: 2, BRICK: 3,
+  DECO: 4, SHED: 5, PODIUM: 6, CONCRETE: 7,
+  ROOF: 8, ROAD_AVENUE: 9, ROAD_STREET: 10, PAVEMENT: 11,
+  PLAZA: 12, PATH: 13, DECK: 14, GLASS_ALT: 15,
+};
+
+export const ATLAS_COLUMNS = 4;
+export const TILE_WINDOWS = 8;   // windows per tile, in both axes
+
+/** uv offset/scale for a tile, as the vec4 the shader wants. */
+export function tileAtlas(index) {
+  const col = index % ATLAS_COLUMNS;
+  const row = (index / ATLAS_COLUMNS) | 0;
+  const s = 1 / ATLAS_COLUMNS;
+  // Canvas rows run top-down, UV rows run bottom-up.
+  return [col * s, 1 - (row + 1) * s, s, s];
+}
+
+/** Slightly varied greys/browns so no two neighbouring panels match exactly. */
+function jitterHex(rnd, base, amount) {
+  const n = parseInt(base.slice(1), 16);
+  const k = 1 + (rnd() - 0.5) * 2 * amount;
+  const ch = (shift) => clamp(Math.round(((n >> shift) & 255) * k), 0, 255);
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+
+/**
+ * Draws one facade tile: a grid of windows in a wall, plus spandrels, mullions
+ * and a little grime. `emissive` switches to drawing only the lit windows on
+ * black, which is the same geometry sampled by the emissive map at night.
+ */
+function drawFacade(ctx, ox, oy, size, opts, emissive) {
+  const n = TILE_WINDOWS;
+  const cell = size / n;
+  const rnd = mulberry32(opts.seed);
+
+  if (!emissive) {
+    ctx.fillStyle = opts.wall;
+    ctx.fillRect(ox, oy, size, size);
+    // Broad panel banding so the wall is not one flat colour.
+    for (let j = 0; j < n; j++) {
+      ctx.fillStyle = jitterHex(rnd, opts.wall, 0.055);
+      ctx.fillRect(ox, oy + j * cell, size, cell);
+    }
+  } else {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(ox, oy, size, size);
+  }
+
+  const inset = cell * opts.inset;
+  const wW = cell - inset * 2;
+  const wH = (cell - inset * 2) * opts.aspect;
+  const wY = inset + (cell - inset * 2 - wH) * (opts.sill ?? 0.35);
+
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const x = ox + i * cell + inset;
+      const y = oy + j * cell + wY;
+      const lit = rnd() < opts.litChance;
+      const bright = 0.55 + rnd() * 0.45;
+
+      if (emissive) {
+        if (!lit) continue;
+        const c = opts.lightColors[(rnd() * opts.lightColors.length) | 0];
+        ctx.fillStyle = c;
+        ctx.globalAlpha = bright;
+        ctx.fillRect(x, y, wW, wH);
+        // A warmer core, so the window is not a flat rectangle of colour.
+        ctx.globalAlpha = bright * 0.5;
+        ctx.fillRect(x + wW * 0.14, y + wH * 0.12, wW * 0.72, wH * 0.5);
+        ctx.globalAlpha = 1;
+        continue;
+      }
+
+      ctx.fillStyle = opts.glassShades[(rnd() * opts.glassShades.length) | 0];
+      ctx.fillRect(x, y, wW, wH);
+      // Sky reflection across the top of the pane.
+      ctx.fillStyle = opts.sheen;
+      ctx.globalAlpha = 0.16 + rnd() * 0.26;
+      ctx.fillRect(x, y, wW, wH * (0.22 + rnd() * 0.3));
+      ctx.globalAlpha = 1;
+
+      if (opts.mullion) {
+        ctx.strokeStyle = opts.mullion;
+        ctx.lineWidth = Math.max(1, cell * 0.045);
+        ctx.strokeRect(x + 0.5, y + 0.5, wW - 1, wH - 1);
+      }
+    }
+  }
+
+  if (emissive) return;
+
+  // Vertical piers, the thing that makes a deco tower read as one.
+  if (opts.piers) {
+    ctx.fillStyle = opts.piers;
+    for (let i = 0; i <= n; i++) {
+      ctx.fillRect(ox + i * cell - cell * 0.06, oy, cell * 0.12, size);
+    }
+  }
+  // Floor slab shadow line.
+  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  for (let j = 0; j < n; j++) ctx.fillRect(ox, oy + j * cell + cell - 2, size, 2);
+}
+
+function drawShed(ctx, ox, oy, size, emissive) {
+  const rnd = mulberry32(515);
+  if (emissive) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(ox, oy, size, size);
+    // A couple of high strip windows and a security lamp.
+    for (let i = 0; i < 4; i++) {
+      if (rnd() < 0.5) continue;
+      ctx.fillStyle = 'rgba(210,225,255,0.55)';
+      ctx.fillRect(ox + i * (size / 4) + 8, oy + size * 0.13, size / 4 - 16, size * 0.07);
+    }
+    ctx.fillStyle = 'rgba(255,214,150,0.85)';
+    ctx.fillRect(ox + size * 0.46, oy + size * 0.52, size * 0.08, size * 0.05);
+    return;
+  }
+  ctx.fillStyle = '#6d7076';
+  ctx.fillRect(ox, oy, size, size);
+  // Corrugation.
+  for (let i = 0; i < 48; i++) {
+    ctx.fillStyle = i % 2 ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.09)';
+    ctx.fillRect(ox + i * (size / 48), oy, size / 48, size);
+  }
+  ctx.fillStyle = 'rgba(30,34,40,0.55)';
+  ctx.fillRect(ox, oy + size * 0.10, size, size * 0.012);
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = '#2c3340';
+    ctx.fillRect(ox + i * (size / 4) + 8, oy + size * 0.13, size / 4 - 16, size * 0.07);
+  }
+  // Rust streaks.
+  for (let i = 0; i < 26; i++) {
+    ctx.fillStyle = `rgba(112,78,52,${0.05 + rnd() * 0.12})`;
+    const x = ox + rnd() * size;
+    ctx.fillRect(x, oy + rnd() * size * 0.5, 2 + rnd() * 4, size * (0.2 + rnd() * 0.5));
+  }
+}
+
+/** Ground floors: glazed shopfronts, awnings and a neon sign or two. */
+function drawPodium(ctx, ox, oy, size, emissive) {
+  const rnd = mulberry32(2024);
+  const bays = 6;
+  const cell = size / bays;
+  if (!emissive) {
+    ctx.fillStyle = '#6d7079';
+    ctx.fillRect(ox, oy, size, size);
+    ctx.fillStyle = '#4a4e57';
+    ctx.fillRect(ox, oy, size, size * 0.16);
+  } else {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(ox, oy, size, size);
+  }
+
+  for (let i = 0; i < bays; i++) {
+    const x = ox + i * cell + cell * 0.10;
+    const w = cell * 0.80;
+    const y = oy + size * 0.24;
+    const h = size * 0.66;
+    if (emissive) {
+      const warm = rnd() < 0.72;
+      ctx.fillStyle = warm ? 'rgba(255,206,140,0.9)' : 'rgba(180,225,255,0.75)';
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = ['#ff5f7a', '#5fd0ff', '#c8ff6a', '#ffb03a'][(rnd() * 4) | 0];
+      ctx.fillRect(x + w * 0.12, oy + size * 0.09, w * 0.76, size * 0.08);
+    } else {
+      ctx.fillStyle = '#2c3742';
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = 'rgba(170,200,225,0.30)';
+      ctx.fillRect(x, y, w, h * 0.35);
+      ctx.fillStyle = ['#7a3040', '#2a5a70', '#5a7030', '#7a5520'][(rnd() * 4) | 0];
+      ctx.fillRect(x + w * 0.12, oy + size * 0.09, w * 0.76, size * 0.08);
+    }
+  }
+  if (!emissive) {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(ox, oy + size * 0.92, size, size * 0.08);
+  }
+}
+
+/** Flat surfaces: tarmac with lane markings, pavement, paving, decking. */
+function drawSurface(ctx, ox, oy, size, kind) {
+  const rnd = mulberry32(3300 + kind);
+  const grain = (base, amount, count) => {
+    for (let i = 0; i < count; i++) {
+      ctx.fillStyle = `rgba(${base},${(rnd() * amount).toFixed(3)})`;
+      ctx.fillRect(ox + rnd() * size, oy + rnd() * size, 1 + rnd() * 3, 1 + rnd() * 3);
+    }
+  };
+
+  if (kind === TILE.ROAD_AVENUE || kind === TILE.ROAD_STREET) {
+    ctx.fillStyle = '#33353a';
+    ctx.fillRect(ox, oy, size, size);
+    grain('255,255,255', 0.06, 1400);
+    grain('0,0,0', 0.16, 900);
+    const lanes = kind === TILE.ROAD_AVENUE ? [0.25, 0.5, 0.75] : [0.5];
+    for (const u of lanes) {
+      const solid = kind === TILE.ROAD_AVENUE && u === 0.5;
+      ctx.fillStyle = solid ? 'rgba(228,206,120,0.85)' : 'rgba(226,228,232,0.75)';
+      const w = size * 0.012;
+      if (solid) {
+        ctx.fillRect(ox + size * u - w * 1.6, oy, w, size);
+        ctx.fillRect(ox + size * u + w * 0.6, oy, w, size);
+      } else {
+        for (let d = 0; d < 4; d++) ctx.fillRect(ox + size * u - w / 2, oy + d * (size / 4), w, size / 7);
+      }
+    }
+    // Kerb edging.
+    ctx.fillStyle = 'rgba(200,200,200,0.35)';
+    ctx.fillRect(ox, oy, size * 0.01, size);
+    ctx.fillRect(ox + size * 0.99, oy, size * 0.01, size);
+    return;
+  }
+
+  if (kind === TILE.PAVEMENT) {
+    ctx.fillStyle = '#8c8a85';
+    ctx.fillRect(ox, oy, size, size);
+    const n = 6;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        ctx.fillStyle = jitterHex(rnd, '#8c8a85', 0.06);
+        ctx.fillRect(ox + i * (size / n) + 1, oy + j * (size / n) + 1, size / n - 2, size / n - 2);
+      }
+    }
+    grain('0,0,0', 0.10, 700);
+    return;
+  }
+
+  if (kind === TILE.PLAZA) {
+    ctx.fillStyle = '#7b7770';
+    ctx.fillRect(ox, oy, size, size);
+    const n = 8;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const alt = (i + j) % 2 === 0;
+        ctx.fillStyle = jitterHex(rnd, alt ? '#84806f' : '#6e6b66', 0.05);
+        ctx.fillRect(ox + i * (size / n) + 1, oy + j * (size / n) + 1, size / n - 2, size / n - 2);
+      }
+    }
+    return;
+  }
+
+  if (kind === TILE.PATH) {
+    ctx.fillStyle = '#8a7f68';
+    ctx.fillRect(ox, oy, size, size);
+    for (let i = 0; i < 2600; i++) {
+      ctx.fillStyle = `rgba(${rnd() < 0.5 ? '120,110,92' : '160,150,126'},${0.2 + rnd() * 0.5})`;
+      ctx.fillRect(ox + rnd() * size, oy + rnd() * size, 1 + rnd() * 3, 1 + rnd() * 3);
+    }
+    return;
+  }
+
+  if (kind === TILE.DECK) {
+    ctx.fillStyle = '#6b573f';
+    ctx.fillRect(ox, oy, size, size);
+    const planks = 8;
+    for (let i = 0; i < planks; i++) {
+      ctx.fillStyle = jitterHex(rnd, '#6b573f', 0.13);
+      ctx.fillRect(ox + i * (size / planks), oy, size / planks - 2, size);
+      for (let g = 0; g < 30; g++) {
+        ctx.fillStyle = `rgba(60,44,30,${0.06 + rnd() * 0.14})`;
+        ctx.fillRect(ox + i * (size / planks), oy + rnd() * size, size / planks - 2, 1);
+      }
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    for (let i = 0; i <= planks; i++) ctx.fillRect(ox + i * (size / planks) - 1, oy, 2, size);
+    return;
+  }
+
+  if (kind === TILE.ROOF) {
+    ctx.fillStyle = '#4c4e50';
+    ctx.fillRect(ox, oy, size, size);
+    grain('255,255,255', 0.09, 2200);
+    grain('0,0,0', 0.20, 1600);
+    ctx.strokeStyle = 'rgba(30,32,34,0.6)';
+    ctx.lineWidth = 2;
+    for (let i = 1; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + i * (size / 4), oy);
+      ctx.lineTo(ox + i * (size / 4), oy + size);
+      ctx.stroke();
+    }
+    return;
+  }
+
+  // CONCRETE — plain precast panels for party walls and plant rooms.
+  ctx.fillStyle = '#9a9791';
+  ctx.fillRect(ox, oy, size, size);
+  for (let j = 0; j < 4; j++) {
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = jitterHex(rnd, '#9a9791', 0.05);
+      ctx.fillRect(ox + i * (size / 4) + 2, oy + j * (size / 4) + 2, size / 4 - 4, size / 4 - 4);
+    }
+  }
+  grain('0,0,0', 0.10, 900);
+}
+
+const FACADES = {
+  [TILE.GLASS]: {
+    seed: 11, wall: '#3b4a55', inset: 0.10, aspect: 0.78, litChance: 0.34,
+    glassShades: ['#4d6f82', '#3f5f72', '#59808f', '#456876'],
+    sheen: '#b8dcea', mullion: 'rgba(24,30,36,0.75)',
+    lightColors: ['#ffe0ac', '#ffd28c', '#e8f0ff'],
+  },
+  [TILE.GLASS_ALT]: {
+    seed: 12, wall: '#2f4450', inset: 0.06, aspect: 0.9, litChance: 0.28,
+    glassShades: ['#3e6473', '#33545f', '#4a7280'],
+    sheen: '#a6cfe0', mullion: 'rgba(20,26,32,0.65)',
+    lightColors: ['#ffe6bc', '#dfeaff'],
+  },
+  [TILE.BRONZE]: {
+    seed: 13, wall: '#3a3129', inset: 0.09, aspect: 0.85, litChance: 0.30,
+    glassShades: ['#4e4032', '#5c4b3a', '#43372c'],
+    sheen: '#c9a97e', mullion: 'rgba(28,22,16,0.8)',
+    lightColors: ['#ffca7c', '#ffb95e'],
+  },
+  [TILE.OFFICE]: {
+    seed: 14, wall: '#b3ada2', inset: 0.20, aspect: 0.72, litChance: 0.40,
+    glassShades: ['#39454e', '#2f3a42', '#44505a'],
+    sheen: '#9fbccb', mullion: 'rgba(240,238,232,0.5)',
+    lightColors: ['#fff0cc', '#ffe4a8', '#dbe8ff'],
+  },
+  [TILE.BRICK]: {
+    seed: 15, wall: '#7a4a3a', inset: 0.24, aspect: 0.86, litChance: 0.42,
+    glassShades: ['#33383e', '#2a2f35', '#3c4249'],
+    sheen: '#8fa6b6', mullion: 'rgba(225,218,205,0.55)',
+    lightColors: ['#ffd89a', '#ffc47a'],
+  },
+  [TILE.DECO]: {
+    seed: 16, wall: '#9d968a', inset: 0.22, aspect: 1.05, litChance: 0.33,
+    glassShades: ['#2f3942', '#27303a', '#39434c'],
+    sheen: '#a8c0d0', mullion: null, piers: 'rgba(178,170,158,0.85)',
+    lightColors: ['#ffe3ae', '#ffd08a'],
+  },
+};
+
+/** Brick needs its bond drawn under the windows, or it reads as flat plaster. */
+function drawBrickBond(ctx, ox, oy, size) {
+  const rnd = mulberry32(818);
+  const rows = 40;
+  const h = size / rows;
+  for (let j = 0; j < rows; j++) {
+    const offset = (j % 2) * h * 1.1;
+    for (let x = -h * 2; x < size; x += h * 2.2) {
+      ctx.fillStyle = jitterHex(rnd, '#7a4a3a', 0.14);
+      ctx.fillRect(ox + x + offset, oy + j * h, h * 2.2 - 1.2, h - 1.2);
+    }
+  }
+}
+
+function makeCityAtlas(size = 1024, emissive = false) {
+  const c = canvas(size);
+  const ctx = c.getContext('2d');
+  const tile = size / ATLAS_COLUMNS;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, size, size);
+
+  for (let index = 0; index < 16; index++) {
+    const ox = (index % ATLAS_COLUMNS) * tile;
+    const oy = ((index / ATLAS_COLUMNS) | 0) * tile;
+    const facade = FACADES[index];
+    if (facade) {
+      if (index === TILE.BRICK && !emissive) drawBrickBond(ctx, ox, oy, tile);
+      drawFacade(ctx, ox, oy, tile, facade, emissive);
+    } else if (index === TILE.SHED) {
+      drawShed(ctx, ox, oy, tile, emissive);
+    } else if (index === TILE.PODIUM) {
+      drawPodium(ctx, ox, oy, tile, emissive);
+    } else if (!emissive) {
+      drawSurface(ctx, ox, oy, tile, index);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // Roads and pavements are almost always seen edge-on, which is exactly the
+  // case anisotropic filtering exists for.
+  tex.anisotropy = 8;
+  // The shader wraps inside a tile itself, so the sampler must clamp.
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
 export function createTextures() {
   return {
     ground: makeGroundTexture(),
@@ -210,6 +609,8 @@ export function createTextures() {
     bush: makeLeafTexture(256, ['#3f5a24', '#4e6b2c', '#35501f', '#5a7630'], 240, 0.34),
     cloud: makeCloudTexture(),
     waterNoise: makeWaterNoiseTexture(),
+    cityAtlas: makeCityAtlas(1024, false),
+    cityLights: makeCityAtlas(1024, true),
   };
 }
 
@@ -537,4 +938,146 @@ export function makeReeds(seed = 1) {
   }
   const geo = merge(parts);
   return setFlex(geo, 0, 1.5, 1.5, 0.34);
+}
+
+// ---------------------------------------------------------------------------
+// City props
+// ---------------------------------------------------------------------------
+
+/** A blunt little hatchback. Painted white so the instance colour decides. */
+export function makeCar(seed = 1) {
+  const rnd = mulberry32(seed + 4400);
+  const parts = [];
+
+  const body = new THREE.BoxGeometry(1.82, 0.66, 4.24);
+  transform(body, { y: 0.72 });
+  paint(body, '#ffffff', 0.02, rnd);
+  parts.push(body);
+
+  const cabin = new THREE.BoxGeometry(1.66, 0.62, 2.28);
+  transform(cabin, { y: 1.34, z: -0.16 });
+  paint(cabin, '#20262e', 0.05, rnd);
+  parts.push(cabin);
+
+  const skirt = new THREE.BoxGeometry(1.9, 0.30, 4.0);
+  transform(skirt, { y: 0.40 });
+  paint(skirt, '#15181c', 0.05, rnd);
+  parts.push(skirt);
+
+  for (const x of [-0.86, 0.86]) {
+    for (const z of [-1.36, 1.42]) {
+      const wheel = new THREE.BoxGeometry(0.18, 0.62, 0.62);
+      transform(wheel, { x, y: 0.34, z });
+      paint(wheel, '#0d0f12', 0.06, rnd);
+      parts.push(wheel);
+    }
+  }
+  return merge(parts);
+}
+
+/** Head and tail lights as their own geometry, driven by the same matrices. */
+export function makeCarLights() {
+  const rnd = mulberry32(9182);
+  const parts = [];
+  for (const x of [-0.62, 0.62]) {
+    const head = new THREE.BoxGeometry(0.36, 0.20, 0.10);
+    transform(head, { x, y: 0.80, z: -2.14 });
+    paint(head, '#fff4d8', 0.0, rnd);
+    parts.push(head);
+
+    const tail = new THREE.BoxGeometry(0.34, 0.18, 0.10);
+    transform(tail, { x, y: 0.86, z: 2.14 });
+    paint(tail, '#ff3a24', 0.0, rnd);
+    parts.push(tail);
+  }
+  return merge(parts);
+}
+
+/** Street lamp: a tapered column with a cranked arm. `reach` points +X. */
+export function makeStreetLamp(height = 7.4, reach = 1.5) {
+  const rnd = mulberry32(6161);
+  const parts = [];
+
+  const base = new THREE.CylinderGeometry(0.16, 0.22, 0.5, 6, 1, false);
+  transform(base, { y: 0.25 });
+  paint(base, '#3a3d42', 0.06, rnd);
+  parts.push(base);
+
+  const pole = new THREE.CylinderGeometry(0.075, 0.13, height, 6, 1, true);
+  transform(pole, { y: height / 2 });
+  paint(pole, '#4a4e55', 0.05, rnd);
+  parts.push(pole);
+
+  const arm = new THREE.BoxGeometry(reach, 0.10, 0.10);
+  transform(arm, { x: reach / 2, y: height - 0.1 });
+  paint(arm, '#4a4e55', 0.05, rnd);
+  parts.push(arm);
+
+  const hood = new THREE.BoxGeometry(0.52, 0.14, 0.26);
+  transform(hood, { x: reach, y: height - 0.22 });
+  paint(hood, '#2f3238', 0.05, rnd);
+  parts.push(hood);
+
+  return merge(parts);
+}
+
+/**
+ * What a lamp contributes after dark: the glowing pane itself, and a pool of
+ * light on the ground under it. The pool is what actually makes a night street
+ * readable — it is an additive disc, which costs nothing next to a real light.
+ */
+export function makeLampGlow(height = 7.4, reach = 1.5) {
+  const parts = [];
+  const pane = new THREE.BoxGeometry(0.54, 0.10, 0.30);
+  transform(pane, { x: reach, y: height - 0.32 });
+  paint(pane, '#ffd9a0', 0.0, () => 0.5);
+  parts.push(pane);
+
+  const halo = new THREE.SphereGeometry(0.42, 8, 6);
+  transform(halo, { x: reach, y: height - 0.32 });
+  paint(halo, '#3a2a12', 0.0, () => 0.5);
+  parts.push(halo);
+
+  const pool = new THREE.CircleGeometry(5.2, 14).rotateX(-Math.PI / 2);
+  transform(pool, { x: reach, y: 0.14 });
+  // Dim: additive, and it stacks with the neighbouring lamps' pools.
+  paint(pool, '#2a1d0c', 0.0, () => 0.5);
+  parts.push(pool);
+
+  return merge(parts);
+}
+
+/** A slab-sided air taxi: something to watch crossing the skyline at night. */
+export function makeAirTaxi(seed = 3) {
+  const rnd = mulberry32(seed + 771);
+  const parts = [];
+
+  const hull = new THREE.BoxGeometry(2.1, 1.0, 6.2);
+  transform(hull, { y: 0.2 });
+  paint(hull, '#2b3138', 0.06, rnd);
+  parts.push(hull);
+
+  const nose = new THREE.BoxGeometry(1.7, 0.7, 1.5);
+  transform(nose, { y: 0.32, z: -3.3 });
+  paint(nose, '#171b21', 0.06, rnd);
+  parts.push(nose);
+
+  for (const x of [-2.4, 2.4]) {
+    const pod = new THREE.BoxGeometry(1.5, 0.42, 1.5);
+    transform(pod, { x, y: 0.5, z: -0.6 });
+    paint(pod, '#3a4149', 0.06, rnd);
+    parts.push(pod);
+    const strut = new THREE.BoxGeometry(Math.abs(x), 0.2, 0.42);
+    transform(strut, { x: x / 2, y: 0.42, z: -0.6 });
+    paint(strut, '#22272d', 0.06, rnd);
+    parts.push(strut);
+  }
+  return merge(parts);
+}
+
+/** Navigation lights for the air taxis and the masts on the tall towers. */
+export function makeBeacon(size = 0.5) {
+  const g = new THREE.SphereGeometry(size, 6, 4);
+  paint(g, '#ffffff', 0.0, () => 0.5);
+  return g;
 }
