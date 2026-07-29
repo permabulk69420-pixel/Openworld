@@ -5,7 +5,8 @@
  * a second noise band that comes up as you approach the lake or the river;
  * birds call during the day and crickets take over at night. The city adds a
  * low traffic rumble and the odd distant horn. Footsteps are short noise bursts
- * shaped by whatever you are walking on.
+ * shaped by whatever you are walking on. The hoverboard adds a low electric
+ * hum, turbine whine, speed-driven air rush, mount chirps and collision thumps.
  *
  * Everything is started from a user gesture (the button that launches the
  * world), which is what browsers require.
@@ -22,6 +23,9 @@ export class Ambience {
     this._nextCricket = 1;
     this._nextHorn = 12;
     this._stepDistance = 0;
+    this._boardMounted = false;
+    this._previousBoardSpeed = 0;
+    this._impactCooldown = 0;
   }
 
   start() {
@@ -74,6 +78,21 @@ export class Ambience {
     this.gustSource.connect(this.gustFilter).connect(this.gustGain).connect(this.master);
     this.gustSource.start();
 
+    // Fast movement gets its own brighter rush, separate from the weather.
+    this.rushSource = ctx.createBufferSource();
+    this.rushSource.buffer = buffer;
+    this.rushSource.loop = true;
+    this.rushHigh = ctx.createBiquadFilter();
+    this.rushHigh.type = 'highpass';
+    this.rushHigh.frequency.value = 450;
+    this.rushLow = ctx.createBiquadFilter();
+    this.rushLow.type = 'lowpass';
+    this.rushLow.frequency.value = 2600;
+    this.rushGain = ctx.createGain();
+    this.rushGain.gain.value = 0;
+    this.rushSource.connect(this.rushHigh).connect(this.rushLow).connect(this.rushGain).connect(this.master);
+    this.rushSource.start();
+
     // --- water --------------------------------------------------------------
     this.waterSource = ctx.createBufferSource();
     this.waterSource.buffer = buffer;
@@ -104,6 +123,50 @@ export class Ambience {
     this.cityGain.gain.value = 0;
     this.citySource.connect(this.cityFilter).connect(this.cityGain).connect(this.master);
     this.citySource.start();
+
+    // --- hoverboard ---------------------------------------------------------
+    this.boardBus = ctx.createGain();
+    this.boardBus.gain.value = 0;
+    this.boardBus.connect(this.master);
+
+    // A low, slightly dirty electric motor tone.
+    this.boardHum = ctx.createOscillator();
+    this.boardHum.type = 'sawtooth';
+    this.boardHum.frequency.value = 54;
+    this.boardHumFilter = ctx.createBiquadFilter();
+    this.boardHumFilter.type = 'lowpass';
+    this.boardHumFilter.frequency.value = 310;
+    this.boardHumGain = ctx.createGain();
+    this.boardHumGain.gain.value = 0.075;
+    this.boardHum.connect(this.boardHumFilter).connect(this.boardHumGain).connect(this.boardBus);
+    this.boardHum.start();
+
+    // A detuned upper layer gives throttle and lift some audible bite.
+    this.boardWhine = ctx.createOscillator();
+    this.boardWhine.type = 'triangle';
+    this.boardWhine.frequency.value = 118;
+    this.boardWhine.detune.value = 9;
+    this.boardWhineFilter = ctx.createBiquadFilter();
+    this.boardWhineFilter.type = 'bandpass';
+    this.boardWhineFilter.frequency.value = 520;
+    this.boardWhineFilter.Q.value = 1.1;
+    this.boardWhineGain = ctx.createGain();
+    this.boardWhineGain.gain.value = 0.035;
+    this.boardWhine.connect(this.boardWhineFilter).connect(this.boardWhineGain).connect(this.boardBus);
+    this.boardWhine.start();
+
+    // Filtered noise acts as the thruster exhaust rather than another pure tone.
+    this.boardThrustSource = ctx.createBufferSource();
+    this.boardThrustSource.buffer = buffer;
+    this.boardThrustSource.loop = true;
+    this.boardThrustFilter = ctx.createBiquadFilter();
+    this.boardThrustFilter.type = 'bandpass';
+    this.boardThrustFilter.frequency.value = 900;
+    this.boardThrustFilter.Q.value = 0.75;
+    this.boardThrustGain = ctx.createGain();
+    this.boardThrustGain.gain.value = 0;
+    this.boardThrustSource.connect(this.boardThrustFilter).connect(this.boardThrustGain).connect(this.boardBus);
+    this.boardThrustSource.start();
   }
 
   setEnabled(on) {
@@ -117,6 +180,13 @@ export class Ambience {
     if (!this.started || !this.ctx) return;
     const t = this.ctx.currentTime;
 
+    // The board is available through the public world handle. Keeping this read
+    // here avoids plumbing audio-only fields through the main frame loop.
+    const board = s.hoverboard || window.openworld?.state?.hoverboard || null;
+    const mounted = !!board?.mounted;
+    const boardSpeed = mounted ? Math.abs(board.forwardSpeed || 0) : 0;
+    const verticalSpeed = mounted ? (board.verticalSpeed || 0) : 0;
+
     // Wind rises with altitude and exposure, and breathes on a slow cycle.
     const exposure = clamp((s.altitude - 8) / 90, 0, 1);
     const gust = 0.55 + 0.45 * Math.sin(s.time * 0.21) * Math.sin(s.time * 0.077 + 1.3);
@@ -124,6 +194,46 @@ export class Ambience {
     this.windGain.gain.setTargetAtTime(windLevel, t, 0.4);
     this.windFilter.frequency.setTargetAtTime(320 + exposure * 620 + gust * 260, t, 0.5);
     this.gustGain.gain.setTargetAtTime(exposure * exposure * 0.035 * gust, t, 0.6);
+
+    // Air rushing past the rider. It starts gently and gets much louder above
+    // ordinary running speed so the hoverboard actually feels fast.
+    const motionSpeed = Math.max(s.speed || 0, boardSpeed);
+    const rush = clamp((motionSpeed - 3) / 28, 0, 1);
+    const rushLevel = Math.pow(rush, 1.35) * (mounted ? 0.20 : 0.09);
+    this.rushGain.gain.setTargetAtTime(rushLevel, t, mounted ? 0.12 : 0.3);
+    this.rushHigh.frequency.setTargetAtTime(380 + rush * 900, t, 0.2);
+    this.rushLow.frequency.setTargetAtTime(1800 + rush * 3000, t, 0.2);
+
+    // Hoverboard motor. Vertical speed is a useful proxy for trigger thrust,
+    // while forward speed pushes both pitch and filter brightness upward.
+    const speedRatio = clamp(boardSpeed / 34, 0, 1);
+    const climb = clamp(Math.max(0, verticalSpeed) / 15, 0, 1);
+    const load = clamp(speedRatio * 0.75 + climb * 0.9, 0, 1);
+    this.boardBus.gain.setTargetAtTime(mounted ? 1 : 0, t, mounted ? 0.08 : 0.18);
+    this.boardHum.frequency.setTargetAtTime(52 + speedRatio * 58 + climb * 34, t, 0.08);
+    this.boardHumFilter.frequency.setTargetAtTime(280 + load * 650, t, 0.1);
+    this.boardHumGain.gain.setTargetAtTime(0.055 + load * 0.055, t, 0.1);
+    this.boardWhine.frequency.setTargetAtTime(112 + speedRatio * 190 + climb * 150, t, 0.07);
+    this.boardWhineFilter.frequency.setTargetAtTime(450 + load * 1500, t, 0.1);
+    this.boardWhineGain.gain.setTargetAtTime(0.02 + load * 0.055, t, 0.1);
+    this.boardThrustFilter.frequency.setTargetAtTime(700 + climb * 2200 + speedRatio * 700, t, 0.08);
+    this.boardThrustGain.gain.setTargetAtTime(0.015 + climb * 0.14 + speedRatio * 0.035, t, 0.08);
+
+    if (mounted !== this._boardMounted) {
+      this.boardPowerCue(mounted);
+      this._boardMounted = mounted;
+      this._previousBoardSpeed = boardSpeed;
+    }
+
+    // A sudden speed loss is almost always the board clipping a wall. Give it a
+    // blunt synthetic thump so the haptics are not doing all the work.
+    this._impactCooldown = Math.max(0, this._impactCooldown - dt);
+    const speedDrop = this._previousBoardSpeed - boardSpeed;
+    if (mounted && this._impactCooldown <= 0 && this._previousBoardSpeed > 7 && speedDrop > 3.5) {
+      this.boardImpact(clamp(speedDrop / 14, 0.25, 1));
+      this._impactCooldown = 0.18;
+    }
+    this._previousBoardSpeed = boardSpeed;
 
     // Water: louder and brighter the closer you get.
     const near = clamp(1 - s.waterDistance / 45, 0, 1);
@@ -153,20 +263,23 @@ export class Ambience {
       if (s.daylight < 0.25 && s.altitude < 60 && Math.random() > urban) this.cricket();
     }
 
-    // Footsteps, driven by distance travelled rather than a timer.
-    if (s.grounded && !s.swimming && s.speed > 0.4) {
+    // Footsteps, driven by distance travelled rather than a timer. Mounted
+    // riders are explicitly excluded so the board does not wear imaginary shoes.
+    if (!mounted && s.grounded && !s.swimming && s.speed > 0.4) {
       this._stepDistance += s.speed * dt;
       const stride = s.speed > 5 ? 1.55 : 1.05;
       if (this._stepDistance > stride) {
         this._stepDistance = 0;
         this.footstep(s.surface);
       }
-    } else if (s.swimming) {
+    } else if (!mounted && s.swimming) {
       this._stepDistance += dt;
       if (this._stepDistance > 1.4) {
         this._stepDistance = 0;
         this.footstep('water');
       }
+    } else if (mounted) {
+      this._stepDistance = 0;
     }
   }
 
@@ -190,6 +303,44 @@ export class Ambience {
     src.connect(filter).connect(g).connect(this.master);
     src.start(t);
     src.stop(t + duration + 0.05);
+  }
+
+  boardPowerCue(on) {
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1800;
+    const start = on ? 115 : 260;
+    const end = on ? 520 : 82;
+    osc.frequency.setValueAtTime(start, t);
+    osc.frequency.exponentialRampToValueAtTime(end, t + (on ? 0.24 : 0.18));
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(on ? 0.075 : 0.05, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + (on ? 0.3 : 0.22));
+    osc.connect(filter).connect(gain).connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.34);
+  }
+
+  boardImpact(strength = 0.5) {
+    this.noiseBurst(0.16, 'lowpass', 190 + strength * 170, 0.7, 0.07 + strength * 0.11, 75);
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(92 + strength * 28, t);
+    osc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.05 + strength * 0.07, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    osc.connect(g).connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.16);
   }
 
   footstep(surface = 'grass') {
