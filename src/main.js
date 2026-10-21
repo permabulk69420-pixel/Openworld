@@ -159,6 +159,13 @@ async function build() {
   });
   state.wrist = new WristPanel(state.player.grips[0]);
 
+  // Start in the city, standing at the car's driver door and facing it.
+  if (state.car.loaded) {
+    const car = state.car.group.position;
+    window.openworld.teleport(car.x - 2.4, car.z, -Math.PI / 2);
+    state.player.rig.rotation.y = state.player.yaw;
+  }
+
   ui.progress(1, 'Ready');
   ui.ready();
   renderer.setAnimationLoop(tick);
@@ -215,7 +222,7 @@ async function checkXR() {
   if (supported) {
     ui.enterVR.disabled = false;
     ui.enterVR.textContent = 'Enter VR';
-    ui.setNote('The hoverboard is waiting beside the spawn point. Press B to mount it, then follow the road south — the city is over the pass.');
+    ui.setNote('You start in the city beside the car. Press B to get in. The hoverboard is back at the lake where the world used to start.');
   } else {
     ui.enterVR.textContent = 'No headset detected';
     ui.setNote('No immersive-vr device was reported. Open this page in the Quest browser over https, or use the desktop controls to test it.');
