@@ -47,6 +47,7 @@ export class Player {
     this.scene = scene;
     this.sampleSpacing = options.sampleSpacing || 2;
     this.hoverboard = options.hoverboard || null;
+    this.car = options.car || null;
     this.city = options.city || null;
     this.onNotice = options.onNotice || (() => {});
     this.onCycleTime = options.onCycleTime || (() => {});
@@ -236,19 +237,23 @@ export class Player {
   }
 
   toggleHoverboard() {
-    if (!this.hoverboard) return;
+    const vehicles = [this.hoverboard, this.car].filter(Boolean);
+    if (!vehicles.length) return;
 
-    if (this.hoverboard.mounted) {
-      this.hoverboard.dismount(this);
+    const current = vehicles.find((vehicle) => vehicle.mounted);
+    if (current) {
+      current.dismount(this);
       return;
     }
 
-    if (this.hoverboard.mount(this)) {
-      this.webs.releaseAll(true);
-      return;
+    for (const vehicle of vehicles) {
+      if (vehicle.mount(this)) {
+        this.webs.releaseAll(true);
+        return;
+      }
     }
 
-    this.onNotice('Move closer to the hoverboard');
+    this.onNotice('Move closer to a vehicle');
   }
 
   finishInputFrame(input) {
@@ -277,7 +282,8 @@ export class Player {
       : this.justPressedKeys.has('KeyT');
     if (timeToggle) this.onCycleTime();
 
-    if (this.hoverboard?.mounted) {
+    const vehicle = [this.hoverboard, this.car].find((v) => v?.mounted);
+    if (vehicle) {
       this.webs.releaseAll(true);
       let forward = 0;
       let steer = 0;
@@ -308,7 +314,7 @@ export class Player {
         this.camera.position.y = this.headHeight;
       }
 
-      this.hoverboard.updateMounted(dt, { forward, steer, turn, lift, boost }, this);
+      vehicle.updateMounted(dt, { forward, steer, turn, lift, boost }, this);
       this.headHeight = xr ? this.camera.position.y : PLAYER.eyeHeight;
       this.finishInputFrame(input);
       return;

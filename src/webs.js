@@ -197,7 +197,7 @@ export class WebShooter {
 
   validTarget(object) {
     for (let node = object; node; node = node.parent) {
-      if (node === this.root || node === this.player.rig || node === this.player.hoverboard?.group) return false;
+      if (node === this.root || node === this.player.rig || node === this.player.hoverboard?.group || node === this.player.car?.group) return false;
       const name = (node.name || '').toLowerCase();
       if (/water|sky|atmosphere|particle|firefl|player|controller|hoverboard|websystem|webline/.test(name)) {
         return false;

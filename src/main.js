@@ -23,6 +23,7 @@ import { Water } from './water.js';
 import { Sky } from './sky.js';
 import { Atmosphere } from './particles.js';
 import { Hoverboard } from './hoverboard.js';
+import { Car } from './car.js';
 import { Player } from './player.js';
 import { Ambience } from './audio.js';
 import { UI, WristPanel, resolveQuality, formatClock, formatCompass } from './ui.js';
@@ -75,7 +76,7 @@ const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve))
 const state = {
   textures: null, materials: null, cityMaterials: null, terrain: null,
   scatter: null, water: null, sky: null, atmosphere: null, city: null,
-  hoverboard: null, player: null, wrist: null,
+  hoverboard: null, car: null, player: null, wrist: null,
 };
 
 const audio = new Ambience();
@@ -139,12 +140,19 @@ async function build() {
   });
   await state.hoverboard.load();
 
+  state.car = new Car(scene, state.terrain.sampleSpacing, {
+    onNotice: (text) => ui.showNotice(text),
+    city: state.city,
+  });
+  await state.car.load();
+
   ui.progress(0.97, 'Letting the wind in…');
   await nextFrame();
   state.atmosphere = new Atmosphere(scene, quality);
   state.player = new Player(renderer, camera, scene, {
     sampleSpacing: state.terrain.sampleSpacing,
     hoverboard: state.hoverboard,
+    car: state.car,
     city: state.city,
     onNotice: (text) => ui.showNotice(text),
     onCycleTime: () => cycleTime(),
@@ -288,6 +296,7 @@ function tick(timestamp) {
 
   state.player.update(dt, elapsed);
   state.hoverboard.update(dt, elapsed);
+  state.car.update(dt, elapsed);
   state.player.headPosition(head);
 
   state.sky.update(dt, elapsed);
@@ -331,7 +340,7 @@ function tick(timestamp) {
     fpsFrames = 0;
     const place = state.city.placeName(px, pz);
     ui.setStats(
-      `${fps} fps   ${qualityName}${state.hoverboard.mounted ? '   BOARD' : ''}\n` +
+      `${fps} fps   ${qualityName}${state.hoverboard.mounted ? '   BOARD' : ''}${state.car.mounted ? '   CAR' : ''}\n` +
       `${formatClock(state.sky.time)}   ${Math.round(state.player.rig.position.y)} m` +
       `${place ? `   ${place}` : ''}\n` +
       `${state.scatter.instanceCount} instances   ${state.terrain.visibleChunks} chunks`,
