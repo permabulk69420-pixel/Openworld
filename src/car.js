@@ -36,8 +36,24 @@ const DRIVE = 13;
 const REVERSE_DRIVE = 7;
 const BRAKE = 28;
 
+// Steering wheel. Its rim lies in the wheel node's X/Z plane, so it turns around
+// the node's local Y axis, which points away from the driver. Angles are
+// clockwise as the driver sees them, so a positive angle is a right turn.
+const GRAB_RANGE = 0.32;                         // metres from the wheel's centre
+const FULL_LOCK = THREE.MathUtils.degToRad(100); // hands turning this far = full steering
+const MAX_WHEEL = THREE.MathUtils.degToRad(130); // furthest the wheel itself will turn
+
 const _right = new THREE.Vector3();
 const _eye = new THREE.Vector3();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+const _spin = new THREE.Quaternion();
+const _base = new THREE.Matrix4();
+const _baseInverse = new THREE.Matrix4();
+const _center = new THREE.Vector3();
+const _hand = new THREE.Vector3();
+const _local = new THREE.Vector3();
+
+const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 export class Car {
   constructor(scene, sampleSpacing, options = {}) {
@@ -62,6 +78,8 @@ export class Car {
     this.wheels = {};
     this.steeringWheel = null;
     this.steeringWheelBase = new THREE.Quaternion();
+    this.wheelAngle = 0;              // how far the steering wheel is turned
+    this.grab = { left: null, right: null };
     this.eyeOffset = new THREE.Vector3(0.427, 1.19, 0.365);
     this.rigOffset = new THREE.Vector3();
     this.bumped = 0;
@@ -194,7 +212,15 @@ export class Car {
     if (!this.mounted) return;
 
     const throttle = clamp(controls.forward || 0, -1, 1);
-    const steer = clamp((controls.steer || 0) + (controls.turn || 0), -1, 1);
+
+    // In VR the hands on the wheel steer; with no hand on it, the stick does.
+    const handSteer = this.steerFromHands(dt, controls.vr, player);
+    const steer = handSteer !== null
+      ? handSteer
+      : clamp((controls.steer || 0) + (controls.turn || 0), -1, 1);
+    if (handSteer === null) {
+      this.wheelAngle = lerp(this.wheelAngle, steer * FULL_LOCK, 1 - Math.exp(-10 * dt));
+    }
     this.step(dt, throttle, steer, 0);
 
     this.syncRider(player);
@@ -209,6 +235,52 @@ export class Car {
     player.swimming = false;
     player.grounded = false;
     player.velocityY = 0;
+  }
+
+  /**
+   * Hands grab the wheel with the grip button and drag it round. Returns the
+   * steering amount (-1..1), or null when no hand is holding the wheel.
+   */
+  steerFromHands(dt, vr, player) {
+    const wheel = this.steeringWheel;
+    if (!vr || !wheel) return null;
+
+    // The wheel's resting frame (without its own turning), so that hand angles
+    // are measured against something that does not move with the wheel.
+    this.group.updateMatrixWorld(true);
+    _base.compose(wheel.position, this.steeringWheelBase, wheel.scale).premultiply(wheel.parent.matrixWorld);
+    _baseInverse.copy(_base).invert();
+    _center.setFromMatrixPosition(_base);
+
+    let sum = 0;
+    let holding = 0;
+    for (const side of ['left', 'right']) {
+      const hand = vr[side];
+      if (!hand || !hand.squeeze || !hand.object) {
+        this.grab[side] = null;
+        continue;
+      }
+
+      hand.object.getWorldPosition(_hand);
+      _local.copy(_hand).applyMatrix4(_baseInverse);
+      const angle = Math.atan2(_local.z, _local.x);
+
+      const grab = this.grab[side];
+      if (grab) {
+        sum += grab.wheelAtGrab + wrap(grab.handAtGrab - angle);
+        holding++;
+      } else if (_hand.distanceTo(_center) < GRAB_RANGE) {
+        this.grab[side] = { handAtGrab: angle, wheelAtGrab: this.wheelAngle };
+        sum += this.wheelAngle;
+        holding++;
+        player.pulse(side, 0.4, 30);
+      }
+    }
+
+    if (!holding) return null;
+    const target = clamp(sum / holding, -MAX_WHEEL, MAX_WHEEL);
+    this.wheelAngle = lerp(this.wheelAngle, target, 1 - Math.exp(-30 * dt));
+    return clamp(this.wheelAngle / FULL_LOCK, -1, 1);
   }
 
   step(dt, throttle, steer, handbrake) {
@@ -284,7 +356,7 @@ export class Car {
     if (this.steeringWheel) {
       this.steeringWheel.quaternion
         .copy(this.steeringWheelBase)
-        .multiply(_spin.setFromAxisAngle(_zAxis, -this.steerAngle * 12));
+        .multiply(_spin.setFromAxisAngle(_yAxis, this.wheelAngle));
     }
   }
 
@@ -301,6 +373,3 @@ export class Car {
     player.yaw = this.yaw;
   }
 }
-
-const _zAxis = new THREE.Vector3(0, 0, 1);
-const _spin = new THREE.Quaternion();

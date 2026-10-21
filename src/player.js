@@ -290,8 +290,24 @@ export class Player {
       let turn = 0;
       let lift = 0;
       let boost = false;
+      let vr = null;
 
-      if (xr && input) {
+      if (xr && input && vehicle === this.car) {
+        // Driving: right trigger is the accelerator, left trigger the brake
+        // (and reverse once stopped). Steering is done with hands on the wheel;
+        // the left stick only steers when no hand is on it.
+        forward = (input.right?.values[0] || 0) - (input.left?.values[0] || 0);
+        if (input.left) {
+          const [x] = input.left.axes;
+          steer = Math.abs(x) > PLAYER.deadZone ? x : 0;
+        }
+        const hand = (state) => {
+          if (!state) return null;
+          const index = this.controllers.indexOf(state.controller);
+          return { squeeze: !!state.buttons[1], object: index >= 0 ? this.grips[index] : null };
+        };
+        vr = { left: hand(input.left), right: hand(input.right) };
+      } else if (xr && input) {
         if (input.left) {
           const [x, y] = input.left.axes;
           steer = Math.abs(x) > PLAYER.deadZone ? x : 0;
@@ -314,7 +330,7 @@ export class Player {
         this.camera.position.y = this.headHeight;
       }
 
-      vehicle.updateMounted(dt, { forward, steer, turn, lift, boost }, this);
+      vehicle.updateMounted(dt, { forward, steer, turn, lift, boost, vr }, this);
       this.headHeight = xr ? this.camera.position.y : PLAYER.eyeHeight;
       this.finishInputFrame(input);
       return;
